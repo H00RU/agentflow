@@ -1,0 +1,149 @@
+# 优化的AIME训练配置 - Optimized AIME Training Config
+# 解决问题：
+# 1. 奖励始终为0 - 引入课程学习和奖励塑形
+# 2. 学习效率低 - 增加样本效率和探索策略
+# 3. 无检查点保存 - 改进保存策略
+
+device: "cuda"
+
+# 训练参数 - 采用课程学习策略
+total_epochs: 20
+episodes_per_epoch: 8  # 增加episodes以获得更多数据
+update_frequency: 2    # 更频繁的更新
+eval_episodes: 3
+save_frequency: 1      # 每个epoch都保存，以免丢失进度
+
+output_dir: "/content/drive/MyDrive/agentworkflow/outputs/optimized_training"
+experience_pool_size: 5000  # 增大经验池
+
+# 课程学习配置
+curriculum:
+  enable: true
+  # 从简单问题开始，逐步增加难度
+  stages:
+    - epoch: 1-5      # 第1-5个epoch
+      sample_size: 4   # 只用4个最简单的问题
+      difficulty: "easy"
+    - epoch: 6-10     # 第6-10个epoch
+      sample_size: 8   # 增加到8个问题
+      difficulty: "medium"
+    - epoch: 11-20    # 第11-20个epoch
+      sample_size: 12  # 全部12个问题
+      difficulty: "all"
+
+environment:
+  train_datasets:
+    - "AIME"
+  test_datasets:
+    - "AIME"
+  data_path: "/content/agentworkflow/AFlow/data/AIME_2024.jsonl"
+
+  opt_llm_config:
+    model: "gpt-4o-mini"
+    key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    temperature: 1.0  # 增加探索性
+
+  exec_llm_config:
+    model: "gpt-4o-mini"
+    key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    temperature: 0.7  # 执行时稍微保守
+
+  operators:
+    - "Custom"
+    - "MathSolver"
+    - "ScEnsemble"
+    - "Test"
+    - "Review"
+
+  env_num: 1
+  group_n: 1
+  max_rounds: 8      # 减少轮数以加快训练
+  validation_rounds: 5
+  sample: 12         # 完整的12个问题
+
+# 改进的RL配置
+rl:
+  policy:
+    model_path: "/root/models/Qwen2.5-7B-Instruct"
+    use_lora: true
+    lora_r: 32          # 增加LoRA秩以提高表达能力
+    lora_alpha: 64
+    lora_dropout: 0.05  # 添加dropout防止过拟合
+    value_head_dim: 2048 # 增加value head容量
+
+  # 优化的学习率策略
+  learning_rate: 0.0003  # 提高学习率以加快学习
+  lr_schedule: "cosine"  # 使用余弦退火
+  warmup_steps: 100
+
+  batch_size: 8          # 减小batch size以更频繁更新
+  ppo_epochs: 6          # 增加PPO epochs
+  ppo_clip: 0.25         # 稍微放宽裁剪范围
+
+  gamma: 0.99
+  gae_lambda: 0.95
+  value_coef: 1.0        # 增加value loss权重
+  entropy_coef: 0.1      # 大幅增加熵奖励以鼓励探索
+  gradient_clip: 0.5     # 更严格的梯度裁剪
+
+  # 奖励塑形 - Reward Shaping
+  reward_shaping:
+    enable: true
+    # 部分正确也给奖励
+    partial_credit: true
+    # 进步奖励：比上一次好就给奖励
+    improvement_bonus: 0.1
+    # 接近正确答案的奖励
+    proximity_reward: true
+    proximity_scale: 0.5
+    # 基础奖励（避免全0）
+    baseline_reward: 0.01
+
+  # 改进的GiGPO配置
+  gigpo:
+    enable: true
+    epsilon: 0.00001     # 增大epsilon避免数值问题
+    step_advantage_w: 0.6
+    mode: "mean_norm"
+    enable_similarity: true
+    similarity_thresh: 0.9
+    workflow_similarity_thresh: 0.75
+
+  # 探索策略
+  exploration:
+    enable: true
+    # 温度退火：开始时高温度（多探索），后期低温度（多利用）
+    initial_temperature: 1.5
+    final_temperature: 0.5
+    decay_epochs: 15
+
+logging:
+  level: "INFO"
+  # 详细记录每个问题的得分变化
+  log_problem_details: true
+  # 保存workflow示例
+  save_workflow_examples: true
+
+debug:
+  verbose_env: true
+  # 保存失败的案例用于分析
+  save_failed_cases: true
+  # 每5轮打印详细统计
+  detailed_stats_frequency: 5
+
+# 早停策略
+early_stopping:
+  enable: true
+  patience: 5  # 5个epoch没有improvement就停止
+  min_improvement: 0.01
+
+# 检查点策略
+checkpoint:
+  # 保存最好的3个模型
+  keep_best_n: 3
+  # 即使分数为0也要保存（记录探索过程）
+  save_zero_score: true
+  # 保存频率（每个epoch）
+  save_every_epoch: true

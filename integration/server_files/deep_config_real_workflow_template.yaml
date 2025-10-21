@@ -1,0 +1,89 @@
+# Real Workflow Deep Integration Training Configuration
+# 真实Workflow深度集成训练配置
+
+# Device
+device: "cuda"  # or "cpu"
+
+# Training parameters
+total_epochs: 20  # 训练20个epochs
+episodes_per_epoch: 10  # 每epoch 10个episodes
+update_frequency: 5  # 每5个episodes更新一次
+eval_episodes: 3
+save_frequency: 5  # 每5个epochs保存一次
+
+# Output directory
+output_dir: "./output/real_workflow_training"
+
+# Experience pool
+experience_pool_size: 10000
+experience_eviction: "lowest_score"
+
+# Environment configuration
+environment:
+  # Datasets
+  train_datasets:
+    - "HumanEval"
+
+  test_datasets:
+    - "HumanEval"
+
+  # LLM configs for workflow execution
+  opt_llm_config:
+    model: "gpt-4o"
+    key: "YOUR_OPENAI_API_KEY_HERE"  # Replace with your OpenAI API key
+    base_url: "https://api.openai.com/v1"
+    temperature: 0.7
+
+  exec_llm_config:
+    model: "gpt-4o-mini"
+    key: "YOUR_OPENAI_API_KEY_HERE"  # Replace with your OpenAI API key
+    base_url: "https://api.openai.com/v1"
+    temperature: 0.7
+
+  # Available operators
+  operators:
+    - "Custom"
+    - "CustomCodeGenerate"
+    - "ScEnsemble"
+    - "Test"
+
+  # Environment parameters
+  env_num: 2  # 2个并行环境
+  group_n: 2
+  max_rounds: 10  # 每个episode最多10轮
+  validation_rounds: 3
+  sample: 5  # 每次评估测试5个HumanEval问题（随机采样，避免过拟合）
+
+# RL configuration
+rl:
+  # Policy configuration
+  policy:
+    model_path: "/root/models/Qwen2.5-7B-Instruct"  # Qwen模型路径
+    freeze_base: false  # 不冻结base model
+    use_lora: true  # 使用LoRA微调
+    lora_r: 16
+    lora_alpha: 32
+    value_head_dim: 1024
+
+  # RL hyperparameters
+  learning_rate: 0.00001  # 学习率 (1e-5)
+  value_coef: 0.5  # Value loss系数
+  entropy_coef: 0.01  # Entropy系数
+  gradient_clip: 1.0  # 梯度裁剪
+
+  # PPO parameters
+  gamma: 0.99  # Discount factor
+  gae_lambda: 0.95  # GAE lambda
+  ppo_epochs: 4  # PPO更新epochs
+  ppo_clip: 0.2  # PPO clip参数
+  batch_size: 32  # Batch size
+
+  # GiGPO configuration (workflow-specific advantages)
+  gigpo:
+    enable: true
+    epsilon: 0.000001  # 1e-6
+    step_advantage_w: 1.0
+    mode: "mean_norm"
+    enable_similarity: true
+    similarity_thresh: 0.95
+    workflow_similarity_thresh: 0.8
