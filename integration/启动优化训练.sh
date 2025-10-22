@@ -6,7 +6,7 @@ echo "  AIME优化训练系统启动"
 echo "=========================================="
 
 # 切换到integration目录
-cd /content/agentworkflow/integration
+cd /content/agentflow/integration
 
 echo ""
 echo "【1/5】检查配置文件..."
@@ -84,7 +84,7 @@ fi
 
 echo ""
 echo "【4/5】设置输出目录..."
-OUTPUT_DIR="/content/drive/MyDrive/agentworkflow/outputs/optimized_training"
+OUTPUT_DIR="/content/drive/MyDrive/agentflow/outputs/optimized_training"
 
 # 检查Google Drive是否挂载
 if [ ! -d "/content/drive" ]; then
@@ -116,9 +116,9 @@ mkdir -p "$OUTPUT_DIR/workflows"
 echo "✓ 输出目录: $OUTPUT_DIR"
 
 # 如果输出目录改变了，更新配置文件中的路径
-if [ "$OUTPUT_DIR" != "/content/drive/MyDrive/agentworkflow/outputs/optimized_training" ]; then
+if [ "$OUTPUT_DIR" != "/content/drive/MyDrive/agentflow/outputs/optimized_training" ]; then
     echo "🔄 更新配置文件中的输出路径..."
-    sed -i "s|/content/drive/MyDrive/agentworkflow/outputs/optimized_training|$OUTPUT_DIR|g" 优化运行.yaml
+    sed -i "s|/content/drive/MyDrive/agentflow/outputs/optimized_training|$OUTPUT_DIR|g" 优化运行.yaml
 fi
 
 echo ""

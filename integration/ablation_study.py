@@ -270,7 +270,7 @@ async def main():
 
     # 加载HumanEval问题
     print("加载HumanEval数据集...")
-    humaneval_path = '/content/agentworkflow/AFlow/data/HumanEval.jsonl'
+    humaneval_path = '/content/agentflow/AFlow/data/HumanEval.jsonl'
     problems = {}
     with open(humaneval_path, 'r') as f:
         for line in f:

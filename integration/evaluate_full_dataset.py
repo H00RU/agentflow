@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Dict, Any
 
 # Add paths
-sys.path.insert(0, '/content/agentworkflow/AFlow')
+sys.path.insert(0, '/content/agentflow/AFlow')
 sys.path.insert(0, '/root/aflow_verl_integration/integration')
 
 from workflow_evaluator import WorkflowEvaluator

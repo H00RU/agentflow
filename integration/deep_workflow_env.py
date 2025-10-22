@@ -81,7 +81,7 @@ class DeepWorkflowEnv:
             from aime_evaluator import AIMEEvaluator
             self.evaluator = AIMEEvaluator(
                 llm_config=self.exec_llm_config,
-                dataset_path="/content/agentworkflow/AFlow/data/AIME_2024.jsonl"
+                dataset_path="/content/agentflow/AFlow/data/AIME_2024.jsonl"
             )
             logger.info(f"[DeepWorkflowEnv] Using AIMEEvaluator for AIME dataset")
         else:

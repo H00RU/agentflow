@@ -1,8 +1,8 @@
 #!/bin/bash
 # 训练监控脚本 - 实时显示训练进度
 
-LOG_FILE="/content/drive/MyDrive/agentworkflow/outputs/optimized_training.log"
-STATS_DIR="/content/drive/MyDrive/agentworkflow/outputs/optimized_training"
+LOG_FILE="/content/drive/MyDrive/agentflow/outputs/optimized_training.log"
+STATS_DIR="/content/drive/MyDrive/agentflow/outputs/optimized_training"
 
 echo "=========================================="
 echo "  AIME训练监控"

@@ -7,7 +7,7 @@ import sys
 import asyncio
 
 # Add paths
-sys.path.insert(0, '/content/agentworkflow/AFlow')
+sys.path.insert(0, '/content/agentflow/AFlow')
 sys.path.insert(0, '/root/integration')
 
 from workflow_parser import WorkflowParser

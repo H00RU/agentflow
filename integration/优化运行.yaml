@@ -13,7 +13,7 @@ update_frequency: 2    # 更频繁的更新
 eval_episodes: 3
 save_frequency: 1      # 每个epoch都保存，以免丢失进度
 
-output_dir: "/content/drive/MyDrive/agentworkflow/outputs/optimized_training"
+output_dir: "/content/drive/MyDrive/agentflow/outputs/optimized_training"
 experience_pool_size: 5000  # 增大经验池
 
 # 课程学习配置
@@ -36,7 +36,7 @@ environment:
     - "AIME"
   test_datasets:
     - "AIME"
-  data_path: "/content/agentworkflow/AFlow/data/AIME_2024.jsonl"
+  data_path: "/content/agentflow/AFlow/data/AIME_2024.jsonl"
 
   opt_llm_config:
     model: "gpt-4o-mini"

@@ -94,8 +94,8 @@ echo "【5】验证核心模块导入..."
 
 python3 << 'PYEOF'
 import sys
-sys.path.insert(0, '/content/agentworkflow/integration')
-sys.path.insert(0, '/content/agentworkflow/AFlow')
+sys.path.insert(0, '/content/agentflow/integration')
+sys.path.insert(0, '/content/agentflow/AFlow')
 
 try:
     import torch
@@ -131,7 +131,7 @@ if [ $? -eq 0 ]; then
     echo ""
     echo "下一步："
     echo "  1. export OPENAI_API_KEY='your-api-key'"
-    echo "  2. cd /content/agentworkflow/integration"
+    echo "  2. cd /content/agentflow/integration"
     echo "  3. ./启动优化训练.sh"
 else
     echo ""

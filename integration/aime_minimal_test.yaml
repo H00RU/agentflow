@@ -5,7 +5,7 @@ update_frequency: 3
 eval_episodes: 2
 save_frequency: 2
 
-output_dir: "/content/drive/MyDrive/agentworkflow/outputs/minimal_test"
+output_dir: "/content/drive/MyDrive/agentflow/outputs/minimal_test"
 experience_pool_size: 1000
 
 environment:
@@ -13,7 +13,7 @@ environment:
     - "AIME"
   test_datasets:
     - "AIME"
-  data_path: "/content/agentworkflow/AFlow/data/AIME_2024.jsonl"
+  data_path: "/content/agentflow/AFlow/data/AIME_2024.jsonl"
 
   opt_llm_config:
     model: "gpt-4o-mini"

@@ -31,7 +31,7 @@ try:
     from unified_state import StateManager
     from trainable_qwen_policy import TrainableQwenPolicy
     from rl_trainer import RLTrainer
-    from deep_workflow_env import create_deep_workflow_env
+    from deep_workflow_env_with_meta import create_deep_workflow_env  # 使用元学习增强版本
     from workflow_prompt_manager import get_prompt_manager
 
     IMPORTS_AVAILABLE = True
@@ -349,6 +349,15 @@ class OptimizedTrainer:
         logger.info(f"  更新次数: {epoch_stats['num_updates']}")
         logger.info(f"{'=' * 80}")
 
+        # 打印元学习统计
+        logger.info(f"\n{'=' * 80}")
+        logger.info("元学习进度报告 - Meta Learning Progress")
+        logger.info(f"{'=' * 80}")
+        for dataset, env in self.train_envs.items():
+            if hasattr(env, 'print_meta_statistics'):
+                logger.info(f"\n{dataset}:")
+                env.print_meta_statistics()
+
         return epoch_stats
 
     def save_checkpoint(self, epoch: int, score: float, is_best: bool = False):
@@ -375,6 +384,12 @@ class OptimizedTrainer:
         })
 
         logger.info(f"✓ 检查点已保存: {checkpoint_name} (分数: {score:.4f})")
+
+        # 保存元学习检查点
+        for dataset, env in self.train_envs.items():
+            if hasattr(env, 'save_meta_checkpoint'):
+                env.save_meta_checkpoint()
+                logger.info(f"✓ {dataset} 元学习检查点已保存")
 
     def train(self):
         """主训练循环"""

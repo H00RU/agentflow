@@ -24,7 +24,7 @@ class AIMEEvaluator:
     def __init__(
         self,
         llm_config: Dict[str, Any],
-        dataset_path: str = "/content/agentworkflow/AFlow/data/AIME_2024.jsonl"
+        dataset_path: str = "/content/agentflow/AFlow/data/AIME_2024.jsonl"
     ):
         """
         Args:
