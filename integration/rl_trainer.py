@@ -367,10 +367,28 @@ class RLTrainer:
             Tuple: (advantages, returns)
         """
         # Compute token-level rewards (approximation: broadcast step rewards)
-        token_level_rewards = rewards.unsqueeze(-1) * response_masks  # (bs, seq_len)
+        # Handle both (bs,) and (bs, seq_len) reward shapes
+        print(f"DEBUG compute_advantages_gigpo: rewards shape = {rewards.shape}, response_masks shape = {response_masks.shape}")
+
+        # Squeeze response_masks if it has extra dimensions
+        if len(response_masks.shape) == 3 and response_masks.shape[1] == 1:
+            response_masks = response_masks.squeeze(1)
+            print(f"DEBUG compute_advantages_gigpo: squeezed response_masks shape = {response_masks.shape}")
+
+        if len(rewards.shape) == 1:
+            # rewards is (bs,), expand to (bs, seq_len)
+            token_level_rewards = rewards.unsqueeze(-1) * response_masks
+        elif len(rewards.shape) == 2:
+            # rewards is already (bs, seq_len)
+            token_level_rewards = rewards * response_masks
+        else:
+            raise ValueError(f"Unexpected rewards shape: {rewards.shape}")
+
+        print(f"DEBUG compute_advantages_gigpo: token_level_rewards shape = {token_level_rewards.shape}")
 
         # Compute step rewards (mean over tokens)
         step_rewards = (token_level_rewards * response_masks).sum(dim=1) / response_masks.sum(dim=1).clamp(min=1)
+        print(f"DEBUG compute_advantages_gigpo: step_rewards shape = {step_rewards.shape}")
 
         # Use GiGPO
         advantages, scores = compute_workflow_gigpo_advantage(

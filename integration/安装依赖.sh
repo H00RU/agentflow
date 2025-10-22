@@ -89,6 +89,30 @@ else
     pip install -q aiohttp
 fi
 
+# ray (for VERL distributed training)
+if python3 -c "import ray; print(f'✓ ray {ray.__version__}')" 2>/dev/null; then
+    :
+else
+    echo "⚠️  ray未安装，开始安装..."
+    pip install -q ray
+fi
+
+# tensordict (for VERL data structures)
+if python3 -c "import tensordict; print(f'✓ tensordict {tensordict.__version__}')" 2>/dev/null; then
+    :
+else
+    echo "⚠️  tensordict未安装，开始安装..."
+    pip install -q tensordict
+fi
+
+# tree_sitter (for code parsing in HumanEval benchmark)
+if python3 -c "import tree_sitter; print(f'✓ tree_sitter {tree_sitter.__version__}')" 2>/dev/null; then
+    :
+else
+    echo "⚠️  tree_sitter未安装，开始安装..."
+    pip install -q tree_sitter tree-sitter-python tree-sitter-languages
+fi
+
 echo ""
 echo "【5】验证核心模块导入..."
 

@@ -198,11 +198,11 @@ class WorkflowParser:
         Returns:
             可执行的workflow代码
         """
-        # 导入语句
-        imports = """from typing import Literal, Optional
+        # 导入语句 - 泛用版本，不依赖DatasetType枚举
+        # 这允许支持任意新数据集（如AIME）而无需修改evaluator.py
+        imports = """from typing import Literal, Optional, Union
 from scripts import operators as operator
 from scripts.async_llm import create_llm_instance
-from scripts.evaluator import DatasetType
 """
 
         # 根据数据集类型决定主要的operator
@@ -266,7 +266,7 @@ class Workflow:
         self,
         name: str,
         llm_config,
-        dataset: DatasetType,
+        dataset: str,  # 使用str类型支持任意数据集
     ) -> None:
         self.name = name
         self.dataset = dataset

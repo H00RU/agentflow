@@ -200,7 +200,11 @@ def compute_episode_advantage_by_node(
     """
     # Use response_mask shape to get correct response_length
     response_length = response_mask.shape[-1]
+    print(f"DEBUG compute_episode_advantage_by_node: token_level_rewards shape = {token_level_rewards.shape}")
+    print(f"DEBUG compute_episode_advantage_by_node: response_mask shape = {response_mask.shape}")
+    print(f"DEBUG compute_episode_advantage_by_node: response_length = {response_length}")
     scores = token_level_rewards.sum(dim=-1)
+    print(f"DEBUG compute_episode_advantage_by_node: scores shape after sum = {scores.shape}")
 
     # Group by (index, workflow_node) instead of just index
     # This ensures samples from same MCTS node are grouped
@@ -562,6 +566,9 @@ def step_norm_reward(
     This is kept for compatibility and fallback.
     """
     response_length = response_mask.shape[-1]
+    print(f"DEBUG step_norm_reward: step_rewards shape = {step_rewards.shape}")
+    print(f"DEBUG step_norm_reward: response_mask shape = {response_mask.shape}")
+    print(f"DEBUG step_norm_reward: response_length = {response_length}")
     scores = step_rewards.clone()
 
     id2score = defaultdict(list)

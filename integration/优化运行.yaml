@@ -6,29 +6,29 @@
 
 device: "cuda"
 
-# 训练参数 - 采用课程学习策略
-total_epochs: 20
-episodes_per_epoch: 8  # 增加episodes以获得更多数据
-update_frequency: 2    # 更频繁的更新
-eval_episodes: 3
+# 训练参数 - 1小时快速训练
+total_epochs: 3
+episodes_per_epoch: 3  # 减少episodes以加快速度
+update_frequency: 1    # 每个episode后立即更新
+eval_episodes: 1
 save_frequency: 1      # 每个epoch都保存，以免丢失进度
 
 output_dir: "/content/drive/MyDrive/agentflow/outputs/optimized_training"
-experience_pool_size: 5000  # 增大经验池
+experience_pool_size: 1000  # 减小经验池以节省内存
 
 # 课程学习配置
 curriculum:
   enable: true
   # 从简单问题开始，逐步增加难度
   stages:
-    - epoch: 1-5      # 第1-5个epoch
-      sample_size: 4   # 只用4个最简单的问题
+    - epoch: 1        # 第1个epoch
+      sample_size: 3   # 只用3个最简单的问题
       difficulty: "easy"
-    - epoch: 6-10     # 第6-10个epoch
-      sample_size: 8   # 增加到8个问题
+    - epoch: 2        # 第2个epoch
+      sample_size: 4   # 增加到4个问题
       difficulty: "medium"
-    - epoch: 11-20    # 第11-20个epoch
-      sample_size: 12  # 全部12个问题
+    - epoch: 3        # 第3个epoch
+      sample_size: 6   # 6个问题
       difficulty: "all"
 
 environment:
@@ -59,28 +59,28 @@ environment:
 
   env_num: 1
   group_n: 1
-  max_rounds: 8      # 减少轮数以加快训练
-  validation_rounds: 5
-  sample: 12         # 完整的12个问题
+  max_rounds: 5      # 减少轮数以加快训练
+  validation_rounds: 3
+  sample: 6          # 初始6个问题（会被curriculum覆盖）
 
 # 改进的RL配置
 rl:
   policy:
     model_path: "/root/models/Qwen2.5-7B-Instruct"
     use_lora: true
-    lora_r: 32          # 增加LoRA秩以提高表达能力
-    lora_alpha: 64
+    lora_r: 16          # 较小的LoRA秩，训练更快
+    lora_alpha: 32
     lora_dropout: 0.05  # 添加dropout防止过拟合
-    value_head_dim: 2048 # 增加value head容量
+    value_head_dim: 1024 # 较小的value head，训练更快
 
   # 优化的学习率策略
-  learning_rate: 0.0003  # 提高学习率以加快学习
+  learning_rate: 0.0005  # 更高的学习率以加快学习
   lr_schedule: "cosine"  # 使用余弦退火
-  warmup_steps: 100
+  warmup_steps: 50
 
-  batch_size: 8          # 减小batch size以更频繁更新
-  ppo_epochs: 6          # 增加PPO epochs
-  ppo_clip: 0.25         # 稍微放宽裁剪范围
+  batch_size: 4          # 更小batch size以更频繁更新
+  ppo_epochs: 3          # 减少PPO epochs
+  ppo_clip: 0.2
 
   gamma: 0.99
   gae_lambda: 0.95
@@ -115,9 +115,9 @@ rl:
   exploration:
     enable: true
     # 温度退火：开始时高温度（多探索），后期低温度（多利用）
-    initial_temperature: 1.5
-    final_temperature: 0.5
-    decay_epochs: 15
+    initial_temperature: 1.2
+    final_temperature: 0.7
+    decay_epochs: 3
 
 logging:
   level: "INFO"
@@ -135,7 +135,7 @@ debug:
 
 # 早停策略
 early_stopping:
-  enable: true
+  enable: false  # 禁用早停，确保完成所有epoch
   patience: 5  # 5个epoch没有improvement就停止
   min_improvement: 0.01
 

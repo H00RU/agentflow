@@ -103,10 +103,13 @@ class DeepWorkflowEnvWithMeta:
         # 创建evaluator
         if self.dataset.upper() == "AIME":
             from aime_evaluator import AIMEEvaluator
+            import asyncio
             self.evaluator = AIMEEvaluator(
                 llm_config=self.exec_llm_config,
                 dataset_path="/content/agentflow/AFlow/data/AIME_2024.jsonl"
             )
+            # AIMEEvaluator需要异步初始化加载数据集
+            asyncio.run(self.evaluator.initialize())
             logger.info(f"[DeepWorkflowEnvWithMeta] Using AIMEEvaluator")
         else:
             self.evaluator = WorkflowEvaluator(
@@ -144,7 +147,7 @@ class DeepWorkflowEnvWithMeta:
             obs = self._construct_observation(
                 round_num=0,
                 best_score=self.best_score,
-                history_summary=self._get_history_summary()
+                history=self._get_history_summary()
             )
             observations.append(obs)
 
@@ -348,18 +351,37 @@ class DeepWorkflowEnvWithMeta:
             graph_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(graph_module)
 
-            # 创建workflow实例
-            from scripts.evaluator import DatasetType
+            # 创建workflow实例 - 使用泛用的字符串类型
             dataset_type = self._str_to_dataset_type(self.dataset)
 
             workflow = graph_module.Workflow(
                 name=f"workflow_{self.current_round}",
                 llm_config=self.exec_llm_config,
-                dataset=dataset_type
+                dataset=dataset_type  # 现在是str而非DatasetType枚举
             )
 
             # 使用evaluator评估
-            score, cost = self.evaluator.evaluate_workflow(workflow)
+            # 不同evaluator的接口可能不同，需要适配
+            import asyncio
+            import inspect
+
+            eval_result = self.evaluator.evaluate_workflow(workflow)
+
+            # 如果是coroutine，需要await
+            if inspect.iscoroutine(eval_result):
+                eval_result = asyncio.run(eval_result)
+
+            # 适配不同evaluator的返回格式
+            if isinstance(eval_result, dict):
+                # AIMEEvaluator返回字典
+                score = eval_result.get('pass_at_k', 0.0)
+                cost = 0.0  # AIME evaluator不追踪cost
+            elif isinstance(eval_result, tuple) and len(eval_result) == 2:
+                # WorkflowEvaluator返回(score, cost)元组
+                score, cost = eval_result
+            else:
+                logger.warning(f"[DeepWorkflowEnvWithMeta] Unexpected evaluator result format: {type(eval_result)}")
+                score, cost = 0.0, 0.0
 
             sys.path.remove(workflow_dir)
 
@@ -397,21 +419,33 @@ Available operators: {', '.join(self.operators)}
         return "; ".join(summary)
 
     def _str_to_dataset_type(self, dataset: str):
-        """字符串转DatasetType"""
-        from scripts.evaluator import DatasetType
-        dataset_upper = dataset.upper()
+        """
+        字符串转DatasetType - 泛用版本
 
-        mapping = {
-            'HUMANEVAL': DatasetType.HumanEval,
-            'MBPP': DatasetType.MBPP,
-            'GSM8K': DatasetType.GSM8K,
-            'MATH': DatasetType.MATH,
-            'AIME': DatasetType.AIME,
-            'HOTPOTQA': DatasetType.HotpotQA,
-            'DROP': DatasetType.DROP
+        直接返回规范化的数据集名称，无需硬编码所有可能的数据集。
+        这允许系统自动支持新数据集（如AIME）而无需修改此函数。
+        """
+        # 规范化：首字母大写，其余保持原样
+        # 例如: "aime" -> "AIME", "humaneval" -> "HumanEval", "gsm8k" -> "GSM8K"
+        dataset_name = dataset.strip()
+
+        # 特殊处理一些常见的命名约定
+        special_cases = {
+            'humaneval': 'HumanEval',
+            'hotpotqa': 'HotpotQA',
+            'livecodebench': 'LiveCodeBench',
         }
 
-        return mapping.get(dataset_upper, DatasetType.HumanEval)
+        lower_name = dataset_name.lower()
+        if lower_name in special_cases:
+            return special_cases[lower_name]
+
+        # 对于其他数据集（包括AIME），使用全大写或保持原样
+        # 这支持任意新数据集而不需要修改代码
+        if lower_name.isupper() or len(dataset_name) <= 5:
+            return dataset_name.upper()
+
+        return dataset_name
 
     def print_meta_statistics(self):
         """打印元学习统计"""

@@ -123,7 +123,11 @@ class CurriculumScheduler:
 
         for stage in self.stages:
             epoch_range = stage['epoch']
-            if '-' in epoch_range:
+            # 支持两种格式: 整数 (1, 2, 3) 或 字符串范围 ("1-5", "6-10")
+            if isinstance(epoch_range, int):
+                if epoch == epoch_range:
+                    return stage['sample_size']
+            elif isinstance(epoch_range, str) and '-' in epoch_range:
                 start, end = map(int, epoch_range.split('-'))
                 if start <= epoch <= end:
                     return stage['sample_size']
