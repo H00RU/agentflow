@@ -5,8 +5,88 @@ Converts Qwen output to AFlow executable workflow code
 
 import re
 import os
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass
+
+
+class DatasetClassifier:
+    """
+    数据集分类器 - 统一管理数据集类型判断
+    支持动态添加新数据集，避免硬编码
+    """
+
+    # 预定义的数据集分类
+    CODE_DATASETS: Set[str] = {"HUMANEVAL", "MBPP", "CODEEVAL", "APPS", "CODEX"}
+    MATH_DATASETS: Set[str] = {"AIME", "MATH", "GSM8K", "MATHQA", "SVAMP", "AQUA"}
+    QA_DATASETS: Set[str] = {"HOTPOTQA", "DROP", "SQUAD", "NATURALQA"}
+
+    # 数据集特定的默认采样数
+    DEFAULT_SAMPLE_COUNTS: Dict[str, int] = {
+        "AIME": 20,      # 最难的数学竞赛
+        "MATH": 10,      # 中等难度数学
+        "GSM8K": 5,      # 较简单的数学
+        "HUMANEVAL": 3,  # 代码生成
+        "MBPP": 3,       # 代码生成
+    }
+
+    @classmethod
+    def is_code_dataset(cls, dataset: str) -> bool:
+        """判断是否为代码生成数据集"""
+        return dataset.upper() in cls.CODE_DATASETS
+
+    @classmethod
+    def is_math_dataset(cls, dataset: str) -> bool:
+        """判断是否为数学推理数据集"""
+        return dataset.upper() in cls.MATH_DATASETS
+
+    @classmethod
+    def is_qa_dataset(cls, dataset: str) -> bool:
+        """判断是否为问答数据集"""
+        return dataset.upper() in cls.QA_DATASETS
+
+    @classmethod
+    def get_default_sample_count(cls, dataset: str) -> int:
+        """
+        获取数据集的默认采样数
+
+        Returns:
+            默认采样数，如果未定义则根据类型返回合理默认值
+        """
+        dataset_upper = dataset.upper()
+
+        # 检查是否有特定的默认值
+        if dataset_upper in cls.DEFAULT_SAMPLE_COUNTS:
+            return cls.DEFAULT_SAMPLE_COUNTS[dataset_upper]
+
+        # 根据数据集类型返回合理默认值
+        if cls.is_math_dataset(dataset):
+            return 5  # 数学任务默认5
+        elif cls.is_code_dataset(dataset):
+            return 3  # 代码任务默认3
+        else:
+            return 3  # 其他任务默认3
+
+    @classmethod
+    def add_dataset(cls, dataset: str, category: str, sample_count: int = None):
+        """
+        动态添加新数据集
+
+        Args:
+            dataset: 数据集名称
+            category: 类别 ("code", "math", "qa")
+            sample_count: 可选的默认采样数
+        """
+        dataset_upper = dataset.upper()
+
+        if category == "code":
+            cls.CODE_DATASETS.add(dataset_upper)
+        elif category == "math":
+            cls.MATH_DATASETS.add(dataset_upper)
+        elif category == "qa":
+            cls.QA_DATASETS.add(dataset_upper)
+
+        if sample_count is not None:
+            cls.DEFAULT_SAMPLE_COUNTS[dataset_upper] = sample_count
 
 
 @dataclass
@@ -36,13 +116,14 @@ class WorkflowParser:
     def __init__(self):
         self.template_path = None
 
-    def parse_qwen_output(self, qwen_output: str, dataset_type: str = "HumanEval") -> Optional[WorkflowSpec]:
+    def parse_qwen_output(self, qwen_output: str, dataset_type: str = "HumanEval", sample_count: int = None) -> Optional[WorkflowSpec]:
         """
         解析Qwen的输出文本
 
         Args:
             qwen_output: Qwen生成的workflow描述
             dataset_type: 数据集类型 (HumanEval, AIME, 等)
+            sample_count: 采样数量（如果为None，将从qwen_output提取或使用默认值）
 
         Returns:
             WorkflowSpec或None（如果解析失败）
@@ -59,22 +140,28 @@ class WorkflowParser:
             operators = self._extract_operators(qwen_output)
             if not operators:
                 # 根据数据集类型选择默认operator
-                if dataset_type.upper() in ["AIME", "MATH", "GSM8K"]:
+                if DatasetClassifier.is_math_dataset(dataset_type):
                     operators = ["Custom", "ScEnsemble"]  # 数学任务：用Custom让LLM推理
-                else:
+                elif DatasetClassifier.is_code_dataset(dataset_type):
                     operators = ["CustomCodeGenerate"]  # 代码任务：用代码生成器
+                else:
+                    operators = ["Custom"]  # 其他任务：用通用Custom
 
             # 提取步骤
             steps = self._extract_steps(qwen_output)
             if not steps:
                 # 根据数据集类型设置默认步骤
-                if dataset_type.upper() in ["HUMANEVAL", "MBPP", "CODEEVAL"]:
+                if DatasetClassifier.is_code_dataset(dataset_type):
                     steps = ["Generate code solution"]
                 else:
                     steps = ["Generate solution for the problem"]
 
+            # 提取采样数（如果qwen输出中指定了的话）
+            if sample_count is None:
+                sample_count = self._extract_sample_count(qwen_output)
+
             # 生成workflow代码
-            workflow_code = self._generate_workflow_code(operators, steps, dataset_type)
+            workflow_code = self._generate_workflow_code(operators, steps, dataset_type, sample_count)
 
             return WorkflowSpec(
                 modification=modification,
@@ -94,6 +181,45 @@ class WorkflowParser:
         if match:
             return match.group(1).strip()
         return ""
+
+    def _extract_sample_count(self, text: str) -> Optional[int]:
+        """
+        从Qwen输出中提取采样数量
+
+        尝试从以下位置提取：
+        1. <sample_count>N</sample_count>
+        2. "sample N times" 或 "N samples"
+        3. "range(N)" 模式
+
+        Returns:
+            提取到的采样数，如果未找到返回None
+        """
+        # 方法1: 从XML标签提取
+        sample_count_str = self._extract_field(text, "sample_count")
+        if sample_count_str:
+            try:
+                return int(sample_count_str)
+            except ValueError:
+                pass
+
+        # 方法2: 从文本模式提取
+        patterns = [
+            r'sample[s]?\s+(\d+)\s+times',
+            r'(\d+)\s+samples',
+            r'range\((\d+)\)',
+            r'for\s+i\s+in\s+range\((\d+)\)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                try:
+                    return int(match.group(1))
+                except (ValueError, IndexError):
+                    pass
+
+        # 未找到，返回None（将使用默认值）
+        return None
 
     def _extract_operators(self, text: str) -> List[str]:
         """提取operators列表"""
@@ -186,7 +312,7 @@ class WorkflowParser:
 
         return steps
 
-    def _generate_workflow_code(self, operators: List[str], steps: List[str], dataset_type: str = "HumanEval") -> str:
+    def _generate_workflow_code(self, operators: List[str], steps: List[str], dataset_type: str = "HumanEval", sample_count: int = None) -> str:
         """
         生成AFlow workflow Python代码
 
@@ -194,6 +320,7 @@ class WorkflowParser:
             operators: operator列表
             steps: 执行步骤
             dataset_type: 数据集类型 (HumanEval, AIME, 等)
+            sample_count: 采样数量（如果为None，使用默认值）
 
         Returns:
             可执行的workflow代码
@@ -237,10 +364,10 @@ from scripts.async_llm import create_llm_instance
         operator_init_code = "\n        ".join(operator_init)
 
         # 生成workflow执行代码
-        workflow_logic = self._generate_workflow_logic(operators, steps, dataset_type)
+        workflow_logic = self._generate_workflow_logic(operators, steps, dataset_type, sample_count)
 
         # 根据数据集类型生成不同的__call__签名
-        is_code_dataset = dataset_type.upper() in ["HUMANEVAL", "MBPP", "CODEEVAL"]
+        is_code_dataset = DatasetClassifier.is_code_dataset(dataset_type)
 
         if is_code_dataset:
             # 代码生成任务：需要problem和entry_point
@@ -284,19 +411,38 @@ class Workflow:
         """将步骤格式化为注释"""
         return "\n    ".join([f"{i+1}. {step}" for i, step in enumerate(steps)])
 
-    def _generate_workflow_logic(self, operators: List[str], steps: List[str], dataset_type: str = "HumanEval") -> str:
-        """生成workflow执行逻辑"""
-        # 根据数据集类型和operators生成执行流程
-        is_code_dataset = dataset_type.upper() in ["HUMANEVAL", "MBPP", "CODEEVAL"]
-        is_math_dataset = dataset_type.upper() in ["AIME", "MATH", "GSM8K"]
+    def _generate_workflow_logic(self, operators: List[str], steps: List[str], dataset_type: str = "HumanEval", sample_count: int = None) -> str:
+        """
+        生成workflow执行逻辑 - 部分解锁版本
 
-        if "ScEnsemble" in operators:
-            # 有ensemble，需要生成多个候选
+        根据选择的operators智能组合执行流程：
+        - 只调用被选中的operators
+        - 按合理顺序组合（Generate → Ensemble → Review → Revise）
+        """
+        # 使用 DatasetClassifier 判断数据集类型
+        is_code_dataset = DatasetClassifier.is_code_dataset(dataset_type)
+        is_math_dataset = DatasetClassifier.is_math_dataset(dataset_type)
+
+        # 确定采样数：优先使用传入的sample_count，否则使用默认值
+        if sample_count is None:
+            sample_count = DatasetClassifier.get_default_sample_count(dataset_type)
+
+        # 检查哪些operators被选中
+        has_ensemble = "ScEnsemble" in operators
+        has_review = "Review" in operators
+        has_revise = "Revise" in operators
+
+        # ====================================================================
+        # 部分解锁的模板系统 - 根据operators智能组合执行流程
+        # ====================================================================
+
+        # 步骤1: 初始生成 (Generate solutions)
+        if has_ensemble:
+            # 需要生成多个候选
             if is_code_dataset:
-                # 代码生成任务 - 使用CustomCodeGenerate
-                logic = """        # Generate multiple candidate code solutions
+                logic = f"""        # Step 1: Generate {sample_count} candidate code solutions
         solutions = []
-        for i in range(3):
+        for i in range({sample_count}):
             sol = await self.custom_code_generate(
                 problem=problem,
                 entry_point=entry_point,
@@ -304,42 +450,39 @@ class Workflow:
             )
             solutions.append(sol['response'])
 
-        # Use ensemble to select best solution
+        # Step 2: Use ensemble to select best solution
         result = await self.sc_ensemble(solutions=solutions, problem=problem)
         solution = result['response']"""
             elif is_math_dataset:
-                # 数学任务 - 使用Custom让LLM直接推理数学问题
-                logic = """        # Generate multiple candidate math solutions using Custom
+                logic = f"""        # Step 1: Generate {sample_count} candidate math solutions
         solutions = []
-        for i in range(5):
+        for i in range({sample_count}):
             sol = await self.custom(
                 input=problem,
-                instruction="Solve this AIME math problem step by step. Think carefully and provide your final answer as a number between 0 and 999."
+                instruction="Solve this math problem step by step. Think carefully and provide your final answer."
             )
             solutions.append(sol['response'])
 
-        # Use ensemble to select best solution
+        # Step 2: Use ensemble to select best solution
         result = await self.sc_ensemble(solutions=solutions, problem=problem)
         solution = result['response']"""
             else:
-                # 其他推理任务 - 使用Custom
-                logic = """        # Generate multiple candidate solutions
+                logic = f"""        # Step 1: Generate {sample_count} candidate solutions
         solutions = []
-        for i in range(3):
+        for i in range({sample_count}):
             sol = await self.custom(
                 input=problem,
                 instruction=""
             )
             solutions.append(sol['response'])
 
-        # Use ensemble to select best solution
+        # Step 2: Use ensemble to select best solution
         result = await self.sc_ensemble(solutions=solutions, problem=problem)
         solution = result['response']"""
         else:
-            # 简单流程：直接生成解决方案
+            # 单次生成
             if is_code_dataset:
-                # 代码生成任务 - 使用CustomCodeGenerate
-                logic = """        # Generate code solution
+                logic = """        # Step 1: Generate code solution
         sol = await self.custom_code_generate(
             problem=problem,
             entry_point=entry_point,
@@ -347,28 +490,45 @@ class Workflow:
         )
         solution = sol['response']"""
             elif is_math_dataset:
-                # 数学任务 - 使用Custom让LLM推理
-                logic = """        # Solve math problem using Custom
+                logic = """        # Step 1: Generate math solution
         sol = await self.custom(
             input=problem,
-            instruction="Solve this AIME math problem step by step. Think carefully and provide your final answer as a number between 0 and 999."
+            instruction="Solve this math problem step by step. Think carefully and provide your final answer."
         )
         solution = sol['response']"""
             else:
-                # 其他推理任务 - 使用Custom
-                logic = """        # Generate solution
+                logic = """        # Step 1: Generate solution
         sol = await self.custom(
             input=problem,
             instruction=""
         )
         solution = sol['response']"""
 
-        # 如果有Test operator（但不执行，因为我们有独立的evaluator）
-        if "Test" in operators and is_code_dataset:
+        # 步骤2: Review (如果选中)
+        if has_review:
             logic += """
 
-        # Test operator available but not used (we use external evaluator)
-        # test_result = self.test.exec_code(solution, entry_point)"""
+        # Step 3: Review the solution
+        review_result = await self.review(problem=problem, solution=solution)
+        review_feedback = review_result.get('feedback', '') if isinstance(review_result, dict) else str(review_result)"""
+
+        # 步骤3: Revise (如果选中)
+        if has_revise:
+            if has_review:
+                # 有Review，根据反馈决定是否Revise
+                logic += """
+
+        # Step 4: Revise if needed based on review
+        if review_feedback and ('improve' in review_feedback.lower() or 'error' in review_feedback.lower() or 'wrong' in review_feedback.lower()):
+            revise_result = await self.revise(problem=problem, solution=solution, feedback=review_feedback)
+            solution = revise_result.get('response', solution) if isinstance(revise_result, dict) else str(revise_result)"""
+            else:
+                # 没有Review，直接Revise（假设需要改进）
+                logic += """
+
+        # Step 3: Revise the solution
+        revise_result = await self.revise(problem=problem, solution=solution, feedback="Please improve and refine this solution")
+        solution = revise_result.get('response', solution) if isinstance(revise_result, dict) else str(revise_result)"""
 
         # 返回solution
         logic += """

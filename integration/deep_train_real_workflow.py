@@ -101,7 +101,10 @@ class RealWorkflowTrainer:
 
         # Environment configuration
         self.env_config = config.get('environment', {})
-        self.train_datasets = self.env_config.get('train_datasets', ['HumanEval'])
+        # 从配置读取训练数据集，不提供默认值（强制用户在配置文件中指定）
+        self.train_datasets = self.env_config.get('train_datasets', [])
+        if not self.train_datasets:
+            raise ValueError("Please specify 'train_datasets' in config file under 'environment' section")
 
         # RL configuration
         self.rl_config = config.get('rl', {})
@@ -218,10 +221,12 @@ class RealWorkflowTrainer:
         spec.loader.exec_module(module)
 
         WorkflowClass = module.Workflow
+        # 使用第一个训练数据集进行测试
+        test_dataset = self.train_datasets[0] if self.train_datasets else "AIME"
         workflow = WorkflowClass(
             name="TestEvalWorkflow",
             llm_config=self.env_config['exec_llm_config'],
-            dataset="HumanEval"
+            dataset=test_dataset
         )
 
         # 在测试集上评估（10个问题）

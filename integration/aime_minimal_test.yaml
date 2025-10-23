@@ -42,6 +42,10 @@ environment:
   validation_rounds: 6
   sample: 12  # 测试 12 个问题以获得真实的 pass@12
 
+  # 新增：workflow内部采样数配置
+  # 这控制ScEnsemble生成多少个候选方案
+  workflow_sample_count: 20  # AIME难度高，使用20次采样
+
 rl:
   policy:
     model_path: "/root/models/Qwen2.5-7B-Instruct"

@@ -24,15 +24,18 @@ class AIMEEvaluator:
     def __init__(
         self,
         llm_config: Dict[str, Any],
-        dataset_path: str = "/content/agentflow/AFlow/data/AIME_2024.jsonl"
+        dataset_path: str = "/content/agentflow/AFlow/data/AIME_2024.jsonl",
+        sample_size: int = 30
     ):
         """
         Args:
             llm_config: LLM configuration for workflow execution
             dataset_path: Path to AIME dataset JSONL file
+            sample_size: Default number of problems to test (default: 30)
         """
         self.llm_config = llm_config
         self.dataset_path = dataset_path
+        self.sample_size = sample_size
         self.problems = {}
         self.dataset_type = "AIME"
 
@@ -62,7 +65,7 @@ class AIMEEvaluator:
     async def evaluate_workflow(
         self,
         workflow: Any,
-        num_problems: int = 30,
+        num_problems: Optional[int] = None,
         use_test_set: bool = False,
         random_sample: bool = False
     ) -> Dict[str, Any]:
@@ -71,13 +74,16 @@ class AIMEEvaluator:
 
         Args:
             workflow: Workflow instance to evaluate
-            num_problems: Number of problems to test
+            num_problems: Number of problems to test (None = use sample_size from init)
             use_test_set: Whether to use test set (last 20%) or train set (first 80%)
             random_sample: Whether to randomly sample problems
 
         Returns:
             Evaluation results
         """
+        # Use sample_size from init if num_problems not specified
+        if num_problems is None:
+            num_problems = self.sample_size
         logger.info(f"[AIMEEvaluator] Starting evaluation")
         logger.info(f"[AIMEEvaluator] Dataset: AIME")
         logger.info(f"[AIMEEvaluator] Total problems: {len(self.problems)}")

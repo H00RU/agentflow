@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'AFlow', 'scrip
 
 from scripts.logs import logger
 from scripts.evaluator import DatasetType
-from workflow_parser import WorkflowParser, WorkflowSpec
+from workflow_parser import WorkflowParser, WorkflowSpec, DatasetClassifier
 from workflow_evaluator import WorkflowEvaluator
 
 
@@ -41,7 +41,8 @@ class DeepWorkflowEnv:
         env_num: int = 2,
         sample: int = 3,
         max_rounds: int = 10,
-        workspace_path: str = None
+        workspace_path: str = None,
+        workflow_sample_count: int = None
     ):
         """
         初始化真实workflow环境
@@ -55,6 +56,7 @@ class DeepWorkflowEnv:
             sample: 每轮测试的样本数
             max_rounds: 最大轮数
             workspace_path: workspace路径（存储workflow代码）
+            workflow_sample_count: workflow内部采样数（用于ScEnsemble等）
         """
         self.dataset = dataset
         self.opt_llm_config = opt_llm_config
@@ -63,6 +65,7 @@ class DeepWorkflowEnv:
         self.env_num = env_num
         self.sample = sample
         self.max_rounds = max_rounds
+        self.workflow_sample_count = workflow_sample_count
 
         # Workspace路径（存储生成的workflow）
         if workspace_path is None:
@@ -77,13 +80,10 @@ class DeepWorkflowEnv:
         self.workflow_parser = WorkflowParser()
 
         # 创建evaluator（用于真实测试，根据dataset类型动态选择）
-        if self.dataset.upper() == "AIME":
-            from aime_evaluator import AIMEEvaluator
-            self.evaluator = AIMEEvaluator(
-                llm_config=self.exec_llm_config,
-                dataset_path="/content/agentflow/AFlow/data/AIME_2024.jsonl"
-            )
-            logger.info(f"[DeepWorkflowEnv] Using AIMEEvaluator for AIME dataset")
+        # 优先尝试使用特定数据集的evaluator，否则使用通用evaluator
+        if self._has_custom_evaluator(self.dataset):
+            self.evaluator = self._create_custom_evaluator(self.dataset, self.exec_llm_config)
+            logger.info(f"[DeepWorkflowEnv] Using custom evaluator for {self.dataset}")
         else:
             self.evaluator = WorkflowEvaluator(
                 dataset=self.dataset,
@@ -107,6 +107,43 @@ class DeepWorkflowEnv:
         logger.info(f"[DeepWorkflowEnv] Workspace: {self.workspace_path}")
         logger.info(f"[DeepWorkflowEnv] Evaluator sample size: {sample}")
         logger.info(f"[DeepWorkflowEnv] ✅ REAL WORKFLOW EXECUTION ENABLED")
+
+    def _has_custom_evaluator(self, dataset: str) -> bool:
+        """
+        检查数据集是否有自定义evaluator
+
+        Args:
+            dataset: 数据集名称
+
+        Returns:
+            是否有自定义evaluator
+        """
+        dataset_upper = dataset.upper()
+        # 目前只有AIME有自定义evaluator
+        return dataset_upper == "AIME"
+
+    def _create_custom_evaluator(self, dataset: str, llm_config: Dict):
+        """
+        创建数据集特定的自定义evaluator
+
+        Args:
+            dataset: 数据集名称
+            llm_config: LLM配置
+
+        Returns:
+            自定义evaluator实例
+        """
+        dataset_upper = dataset.upper()
+
+        if dataset_upper == "AIME":
+            from aime_evaluator import AIMEEvaluator
+            return AIMEEvaluator(
+                llm_config=llm_config,
+                dataset_path="/content/agentflow/AFlow/data/AIME_2024.jsonl",
+                sample_size=self.sample  # 传递配置的 sample 参数
+            )
+        else:
+            raise ValueError(f"No custom evaluator for dataset: {dataset}")
 
     def reset(self) -> Tuple[List[str], List[Dict]]:
         """
@@ -170,8 +207,12 @@ class DeepWorkflowEnv:
                 logger.info(f"[DeepWorkflowEnv] Env {i}: Processing Qwen output...")
                 logger.info(f"[DeepWorkflowEnv] Env {i}: Action preview: {qwen_action[:200]}...")
 
-                # 1. 解析Qwen输出为workflow规格 (传递dataset类型以生成正确的接口)
-                workflow_spec = self.workflow_parser.parse_qwen_output(qwen_action, dataset_type=self.dataset)
+                # 1. 解析Qwen输出为workflow规格 (传递dataset类型和采样数)
+                workflow_spec = self.workflow_parser.parse_qwen_output(
+                    qwen_action,
+                    dataset_type=self.dataset,
+                    sample_count=self.workflow_sample_count
+                )
 
                 if workflow_spec is None:
                     logger.error(f"[DeepWorkflowEnv] Env {i}: Failed to parse Qwen output!")
@@ -311,7 +352,7 @@ class DeepWorkflowEnv:
             asyncio.set_event_loop(loop)
 
             # 如果是AIMEEvaluator，需要先初始化
-            if hasattr(self.evaluator, 'initialize') and self.dataset.upper() == "AIME":
+            if hasattr(self.evaluator, 'initialize') and self._has_custom_evaluator(self.dataset):
                 if not self.evaluator.problems:  # 只在第一次初始化
                     logger.info(f"[DeepWorkflowEnv] Initializing AIMEEvaluator...")
                     loop.run_until_complete(self.evaluator.initialize())
@@ -403,7 +444,8 @@ def create_deep_workflow_env(dataset, opt_llm_config, exec_llm_config, **kwargs)
         env_num=kwargs.get('env_num', 2),
         sample=kwargs.get('sample', 3),
         max_rounds=kwargs.get('max_rounds', 10),
-        workspace_path=kwargs.get('workspace_path')
+        workspace_path=kwargs.get('workspace_path'),
+        workflow_sample_count=kwargs.get('workflow_sample_count')
     )
 
 

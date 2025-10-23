@@ -32,7 +32,7 @@ environment:
   # 提供多样化的operators让Qwen学习选择
   operators:
     - "Custom"           # 通用operator - 适合数学推理
-    - "CustomCodeGenerate"  # 代码生成operator - 不应该用于AIME
+    # "CustomCodeGenerate" - 代码生成operator，不适合AIME数学题，已移除
     - "ScEnsemble"       # 自一致性集成
     - "Test"             # 测试operator
     - "Review"           # 审查operator
@@ -42,7 +42,11 @@ environment:
   group_n: 1
   max_rounds: 5  # 每个episode最多5轮
   validation_rounds: 3
-  sample: 8  # 减少到8个问题,加快速度
+  sample: 16  # 提升到16个问题,提供更精细的反馈（从8个增加，颗粒度从12.5%提升到6.25%）
+
+  # 新增：workflow内部采样数配置
+  # 这控制ScEnsemble生成多少个候选方案
+  workflow_sample_count: 15  # 快速测试使用15次采样（平衡速度和质量）
 
 rl:
   policy:
