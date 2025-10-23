@@ -51,12 +51,14 @@ class RealWorkflowTrainer:
     5. 训练Qwen学习workflow优化
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], resume_from: str = None):
         """初始化trainer"""
         if not IMPORTS_AVAILABLE:
             raise RuntimeError("Required imports not available. Check dependencies.")
 
         self.config = config
+        self.resume_from = resume_from
+        self.start_epoch = 1  # Will be updated if resuming
         self.device = torch.device(config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu'))
 
         print("=" * 80)
@@ -260,6 +262,7 @@ class RealWorkflowTrainer:
         env_num = self.env_config.get('env_num', 2)
         sample = self.env_config.get('sample', 3)
         max_rounds = self.env_config.get('max_rounds', 10)
+        workflow_sample_count = self.env_config.get('workflow_sample_count')
 
         # Create training environments
         for dataset in self.train_datasets:
@@ -274,7 +277,8 @@ class RealWorkflowTrainer:
                 env_num=env_num,
                 sample=sample,
                 max_rounds=max_rounds,
-                workspace_path=str(self.workflow_dir / dataset)
+                workspace_path=str(self.workflow_dir / dataset),
+                workflow_sample_count=workflow_sample_count
             )
 
             logger.info(f"✅ REAL Workflow Environment created")
@@ -394,6 +398,40 @@ class RealWorkflowTrainer:
 
         logger.info(f"✓ Checkpoint saved to {checkpoint_path}")
 
+    def load_checkpoint(self, checkpoint_path: str):
+        """从checkpoint恢复训练"""
+        logger.info(f"📂 Loading checkpoint from {checkpoint_path}")
+
+        checkpoint_path = Path(checkpoint_path)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+        # Load main checkpoint
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        self.start_epoch = checkpoint['epoch'] + 1  # Continue from next epoch
+        self.stats = checkpoint.get('stats', self.stats)
+
+        # Load policy
+        policy_path = str(checkpoint_path).replace('.pt', '_policy.pt')
+        if Path(policy_path).exists():
+            self.policy.load_checkpoint(policy_path)
+            logger.info(f"✓ Policy loaded from {policy_path}")
+        else:
+            logger.warning(f"⚠️ Policy checkpoint not found: {policy_path}")
+
+        # Load trainer
+        trainer_path = str(checkpoint_path).replace('.pt', '_trainer.pt')
+        if Path(trainer_path).exists():
+            self.rl_trainer.load_checkpoint(trainer_path)
+            logger.info(f"✓ Trainer loaded from {trainer_path}")
+        else:
+            logger.warning(f"⚠️ Trainer checkpoint not found: {trainer_path}")
+
+        logger.info(f"✅ Resume from epoch {self.start_epoch} (completed: {checkpoint['epoch']})")
+        logger.info(f"   Best score so far: {self.stats['best_score']:.4f}")
+        logger.info(f"   Total episodes: {self.stats['total_episodes']}")
+        logger.info(f"   Total updates: {self.stats['total_updates']}")
+
     def train(self):
         """主训练循环"""
         logger.info("\n" + "=" * 80)
@@ -403,8 +441,13 @@ class RealWorkflowTrainer:
         # Create environments
         self._create_environments()
 
+        # Resume from checkpoint if specified
+        if self.resume_from:
+            self.load_checkpoint(self.resume_from)
+            logger.info(f"🔄 Resuming training from epoch {self.start_epoch}")
+
         # Training loop
-        for epoch in range(1, self.total_epochs + 1):
+        for epoch in range(self.start_epoch, self.total_epochs + 1):
             # Train
             epoch_stats = self.train_epoch(epoch)
 
@@ -431,6 +474,8 @@ def main():
     """主入口"""
     parser = argparse.ArgumentParser(description="Real Workflow Deep Integration Training")
     parser.add_argument('--config', type=str, required=True, help="Path to config file")
+    parser.add_argument('--resume', type=str, default=None,
+                        help="Resume from checkpoint (e.g., 'epoch_2.pt' or 'best.pt')")
     args = parser.parse_args()
 
     # Load config
@@ -451,8 +496,19 @@ def main():
 
     config = replace_env_vars(config)
 
+    # Handle resume checkpoint path
+    resume_checkpoint = None
+    if args.resume:
+        # If relative path, assume it's in the checkpoint directory
+        resume_path = Path(args.resume)
+        if not resume_path.is_absolute():
+            output_dir = Path(config.get('output_dir', './output/real_workflow'))
+            resume_checkpoint = str(output_dir / 'checkpoints' / args.resume)
+        else:
+            resume_checkpoint = args.resume
+
     # Create trainer
-    trainer = RealWorkflowTrainer(config)
+    trainer = RealWorkflowTrainer(config, resume_from=resume_checkpoint)
 
     # Train
     trainer.train()
