@@ -28,7 +28,7 @@ try:
     from unified_state import StateManager
     from trainable_qwen_policy import TrainableQwenPolicy
     from rl_trainer import RLTrainer
-    from deep_workflow_env_with_meta import create_deep_workflow_env  # 使用元学习增强版本
+    from deep_workflow_env import create_deep_workflow_env
     from workflow_prompt_manager import get_prompt_manager
 
     IMPORTS_AVAILABLE = True

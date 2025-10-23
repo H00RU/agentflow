@@ -1,0 +1,77 @@
+device: "cuda"
+# 40分钟训练配置 - 快速观察Qwen学习和operator选择
+total_epochs: 5  # 减少到5个epoch
+episodes_per_epoch: 3  # 每个epoch 3个episode
+update_frequency: 2  # 每2个episode更新一次
+eval_episodes: 1  # 评估1个episode
+save_frequency: 2
+
+output_dir: "/content/drive/MyDrive/agentflow/outputs/quick_test"
+experience_pool_size: 500
+
+environment:
+  train_datasets:
+    - "AIME"
+  test_datasets:
+    - "AIME"
+  data_path: "/content/agentflow/AFlow/data/AIME_2024.jsonl"
+
+  # 优化LLM配置 - 提升推理能力
+  opt_llm_config:
+    model: "gpt-4o-mini"
+    key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    temperature: 0.9
+
+  exec_llm_config:
+    model: "gpt-4o-mini"  # 保持使用mini观察性能
+    key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    temperature: 0.7  # 降低temperature提高稳定性
+
+  # 提供多样化的operators让Qwen学习选择
+  operators:
+    - "Custom"           # 通用operator - 适合数学推理
+    - "CustomCodeGenerate"  # 代码生成operator - 不应该用于AIME
+    - "ScEnsemble"       # 自一致性集成
+    - "Test"             # 测试operator
+    - "Review"           # 审查operator
+    - "Revise"           # 修订operator
+
+  env_num: 2  # 2个并行环境,增加探索
+  group_n: 1
+  max_rounds: 5  # 每个episode最多5轮
+  validation_rounds: 3
+  sample: 8  # 减少到8个问题,加快速度
+
+rl:
+  policy:
+    model_path: "/root/models/Qwen2.5-7B-Instruct"
+    use_lora: true
+    lora_r: 16
+    lora_alpha: 32
+    value_head_dim: 1024
+
+  # RL训练参数 - 提高学习率加快收敛
+  learning_rate: 0.0003  # 提高学习率
+  batch_size: 8  # 减小batch size
+  ppo_epochs: 3  # 减少PPO epochs
+  ppo_clip: 0.2
+  gamma: 0.99
+  gae_lambda: 0.95
+  value_coef: 0.5
+  entropy_coef: 0.1  # 提高探索性
+  gradient_clip: 1.0
+
+  gigpo:
+    enable: true
+    epsilon: 0.000001
+    step_advantage_w: 0.8
+    mode: "mean_norm"
+    enable_similarity: true
+
+logging:
+  level: "INFO"
+
+debug:
+  verbose_env: true

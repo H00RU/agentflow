@@ -3,9 +3,9 @@
 
 ## 概述 Overview
 
-成功实现了AFlow和verl-agent的深度集成，创建了一个元学习系统，能够通过强化学习自动设计和优化agent workflow，完全无需人工参与。
+成功实现了AFlow和verl-agent的深度集成，创建了一个强化学习系统，能够通过RL自动设计和优化agent workflow。
 
-Successfully implemented deep integration between AFlow and verl-agent, creating a meta-learning system that can automatically design and optimize agent workflows through reinforcement learning, with zero human participation.
+Successfully implemented deep integration between AFlow and verl-agent, creating a reinforcement learning system that can automatically design and optimize agent workflows through RL.
 
 ## 实现文件 Implemented Files
 
@@ -581,5 +581,5 @@ This implementation fully meets the user's requirements:
 - ✅ Deep integration (not just adapter layer)
 - ✅ High coupling (RL directly participates in AFlow)
 - ✅ No content simplification (full functionality)
-- ✅ No goal simplification (complete meta-learning)
+- ✅ No goal simplification (complete RL training)
 - ✅ No minimization (complete training framework)

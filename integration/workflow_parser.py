@@ -313,7 +313,7 @@ class Workflow:
         solutions = []
         for i in range(5):
             sol = await self.custom(
-                problem=problem,
+                input=problem,
                 instruction="Solve this AIME math problem step by step. Think carefully and provide your final answer as a number between 0 and 999."
             )
             solutions.append(sol['response'])
@@ -327,7 +327,7 @@ class Workflow:
         solutions = []
         for i in range(3):
             sol = await self.custom(
-                problem=problem,
+                input=problem,
                 instruction=""
             )
             solutions.append(sol['response'])
@@ -350,7 +350,7 @@ class Workflow:
                 # 数学任务 - 使用Custom让LLM推理
                 logic = """        # Solve math problem using Custom
         sol = await self.custom(
-            problem=problem,
+            input=problem,
             instruction="Solve this AIME math problem step by step. Think carefully and provide your final answer as a number between 0 and 999."
         )
         solution = sol['response']"""
@@ -358,7 +358,7 @@ class Workflow:
                 # 其他推理任务 - 使用Custom
                 logic = """        # Generate solution
         sol = await self.custom(
-            problem=problem,
+            input=problem,
             instruction=""
         )
         solution = sol['response']"""
