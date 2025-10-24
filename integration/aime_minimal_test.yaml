@@ -30,7 +30,6 @@ environment:
   operators:
     - "Custom"
     - "MathSolver"
-    - "WebSearch"
     - "ScEnsemble"
     - "Test"
     - "Review"

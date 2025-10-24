@@ -89,6 +89,38 @@ else
     pip install -q aiohttp
 fi
 
+# pydantic (for data validation in benchmarks)
+if python3 -c "import pydantic; print(f'✓ pydantic {pydantic.__version__}')" 2>/dev/null; then
+    :
+else
+    echo "⚠️  pydantic未安装，开始安装..."
+    pip install -q pydantic
+fi
+
+# tenacity (for retry mechanism)
+if python3 -c "import tenacity; print(f'✓ tenacity {tenacity.__version__}')" 2>/dev/null; then
+    :
+else
+    echo "⚠️  tenacity未安装，开始安装..."
+    pip install -q tenacity
+fi
+
+# anthropic (for Claude API)
+if python3 -c "import anthropic; print(f'✓ anthropic {anthropic.__version__}')" 2>/dev/null; then
+    :
+else
+    echo "⚠️  anthropic未安装，开始安装..."
+    pip install -q anthropic
+fi
+
+# scipy (for scientific computing)
+if python3 -c "import scipy; print(f'✓ scipy {scipy.__version__}')" 2>/dev/null; then
+    :
+else
+    echo "⚠️  scipy未安装，开始安装..."
+    pip install -q scipy
+fi
+
 # ray (for VERL distributed training)
 if python3 -c "import ray; print(f'✓ ray {ray.__version__}')" 2>/dev/null; then
     :
@@ -133,6 +165,21 @@ try:
 
     import peft
     print(f"✓ peft {peft.__version__}")
+
+    import pydantic
+    print(f"✓ pydantic {pydantic.__version__}")
+
+    import tenacity
+    print(f"✓ tenacity {tenacity.__version__}")
+
+    import anthropic
+    print(f"✓ anthropic {anthropic.__version__}")
+
+    import ray
+    print(f"✓ ray {ray.__version__}")
+
+    import tensordict
+    print(f"✓ tensordict {tensordict.__version__}")
 
     from scripts.logs import logger
     print("✓ AFlow scripts.logs")
