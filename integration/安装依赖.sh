@@ -170,7 +170,7 @@ try:
     print(f"✓ pydantic {pydantic.__version__}")
 
     import tenacity
-    print(f"✓ tenacity {tenacity.__version__}")
+    print(f"✓ tenacity")
 
     import anthropic
     print(f"✓ anthropic {anthropic.__version__}")
