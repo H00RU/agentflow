@@ -42,7 +42,11 @@ environment:
   group_n: 1
   max_rounds: 5  # 每个episode最多5轮
   validation_rounds: 3
-  sample: 16  # 提升到16个问题,提供更精细的反馈（从8个增加，颗粒度从12.5%提升到6.25%）
+  sample: 24  # 训练集大小（总共30题，24训练+6测试）
+
+  # 动态优化模式配置
+  use_dynamic_optimizer: true  # 启用动态优化（MCTS + RL）
+  rl_weight: 0.5  # RL权重，平衡MCTS UCB和RL Q-value
 
   # 新增：workflow内部采样数配置
   # 这控制ScEnsemble生成多少个候选方案
@@ -56,23 +60,25 @@ rl:
     lora_alpha: 32
     value_head_dim: 1024
 
-  # RL训练参数 - 提高学习率加快收敛
-  learning_rate: 0.0003  # 提高学习率
-  batch_size: 8  # 减小batch size
-  ppo_epochs: 3  # 减少PPO epochs
+  # RL训练参数 - 针对AIME小数据集优化（24个训练样本）
+  learning_rate: 0.0001  # 快速测试用稍高学习率
+  batch_size: 4  # 小batch，适合少样本
+  ppo_epochs: 3  # 快速测试减少epochs
   ppo_clip: 0.2
   gamma: 0.99
   gae_lambda: 0.95
   value_coef: 0.5
-  entropy_coef: 0.1  # 提高探索性
+  entropy_coef: 0.05  # 适度探索
   gradient_clip: 1.0
 
   gigpo:
     enable: true
     epsilon: 0.000001
-    step_advantage_w: 0.8
+    step_advantage_w: 1.0  # 充分利用步骤级优势
     mode: "mean_norm"
     enable_similarity: true
+    similarity_thresh: 0.95  # 避免重复探索
+    workflow_similarity_thresh: 0.8  # 避免重复workflow
 
 logging:
   level: "INFO"

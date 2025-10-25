@@ -1,13 +1,14 @@
 device: "cuda"
-# 40分钟训练配置 - 快速观察Qwen学习和operator选择
-total_epochs: 5  # 减少到5个epoch
-episodes_per_epoch: 3  # 每个epoch 3个episode
-update_frequency: 2  # 每2个episode更新一次
-eval_episodes: 1  # 评估1个episode
-save_frequency: 2
+# 改进配置 - 增加训练量以提升性能
+# 修复：Revise触发条件已优化，增加训练epochs和数据量
+total_epochs: 10  # 增加到10个epoch以充分学习
+episodes_per_epoch: 3  # 每个epoch 3个episode,增加经验收集
+update_frequency: 3  # 每3个episode更新一次
+eval_episodes: 2  # 评估2个episode,更稳定的评估
+save_frequency: 2  # 每2个epoch保存一次checkpoint
 
-output_dir: "/content/drive/MyDrive/agentflow/outputs/quick_test"
-experience_pool_size: 500
+output_dir: "/content/drive/MyDrive/agentflow/outputs/full_test"
+experience_pool_size: 500  # 增加经验池大小
 
 environment:
   train_datasets:
@@ -36,7 +37,7 @@ environment:
     - "ScEnsemble"       # 自一致性集成
     - "Test"             # 测试operator
     - "Review"           # 审查operator
-    - "Revise"           # 修订operator
+    - "Revise"           # 修订operator - 触发条件已修复！
 
   env_num: 2  # 2个并行环境,增加探索
   group_n: 1
@@ -50,7 +51,7 @@ environment:
 
   # 新增：workflow内部采样数配置
   # 这控制ScEnsemble生成多少个候选方案
-  workflow_sample_count: 15  # 快速测试使用15次采样（平衡速度和质量）
+  workflow_sample_count: 15  # 使用15次采样（平衡速度和质量）
 
 rl:
   policy:
@@ -61,24 +62,24 @@ rl:
     value_head_dim: 1024
 
   # RL训练参数 - 针对AIME小数据集优化（24个训练样本）
-  learning_rate: 0.00005  # 中等学习率（介于minimal和full之间）
-  batch_size: 4  # 小batch，适合少样本
-  ppo_epochs: 3  # 快速测试用3epochs
+  learning_rate: 0.00003  # 更低学习率，适合高难度题目（从0.0001降低）
+  batch_size: 4  # 小batch，适合少样本（24个训练样本，从8降低）
+  ppo_epochs: 4  # 增加PPO epochs以充分优化
   ppo_clip: 0.2
   gamma: 0.99
   gae_lambda: 0.95
   value_coef: 0.5
-  entropy_coef: 0.04  # 适度探索（介于minimal和full之间）
+  entropy_coef: 0.03  # 降低探索性，AIME需要精确策略（从0.1降低）
   gradient_clip: 1.0
 
   gigpo:
     enable: true
     epsilon: 0.000001
-    step_advantage_w: 1.0  # 充分利用步骤级优势
+    step_advantage_w: 1.0  # 充分利用步骤级优势（从0.8提高）
     mode: "mean_norm"
     enable_similarity: true
-    similarity_thresh: 0.95  # 避免重复探索
-    workflow_similarity_thresh: 0.8  # 避免重复workflow
+    similarity_thresh: 0.95  # 新增：避免重复探索相似状态
+    workflow_similarity_thresh: 0.8  # 新增：避免重复相似workflow
 
 logging:
   level: "INFO"

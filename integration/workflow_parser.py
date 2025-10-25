@@ -516,10 +516,11 @@ class Workflow:
         if has_revise:
             if has_review:
                 # 有Review，根据反馈决定是否Revise
+                # 扩展触发条件以匹配更多错误关键词
                 logic += """
 
         # Step 4: Revise if needed based on review
-        if review_feedback and ('improve' in review_feedback.lower() or 'error' in review_feedback.lower() or 'wrong' in review_feedback.lower()):
+        if review_feedback and any(keyword in review_feedback.lower() for keyword in ['incorrect', 'error', 'wrong', 'mistake', 'flawed', 'improve', 'fix', 'issue', 'problem']):
             revise_result = await self.revise(problem=problem, solution=solution, feedback=review_feedback)
             solution = revise_result.get('response', solution) if isinstance(revise_result, dict) else str(revise_result)"""
             else:

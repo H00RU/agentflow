@@ -37,14 +37,36 @@ def example_map_fn(example, idx, process_fn, data_source, ability, split):
 
 
 def build_aime2024_dataset():
+    # OUTPUT_FORMAT instruction from AgentFlowTarget
+    OUTPUT_FORMAT = (
+        "When ready, output the final answer enclosed in <answer> and </answer> tags. "
+        "Do not generate any content after the </answer> tag."
+    )
+
     def process_aime2024(example):
-        return example["Problem"], str(example["Answer"])
+        problem = example["Problem"]
+        answer = str(example["Answer"])
+        # Add OUTPUT_FORMAT to match AgentFlowTarget
+        full_question = f"{problem}\n\n{OUTPUT_FORMAT}" if problem else OUTPUT_FORMAT
+        return full_question, answer
 
     data_source = "Maxwell-Jia/AIME_2024"
     print(f"Loading the {data_source} dataset from huggingface...", flush=True)
     dataset = load_dataset(data_source, split="train")
     map_fn = partial(example_map_fn, process_fn=process_aime2024, data_source=data_source, ability="English", split="test")
     dataset = dataset.map(map_fn, with_indices=True, remove_columns=dataset.column_names)
+
+    # Shuffle with seed=42 to match AgentFlowTarget
+    print("Shuffling AIME_2024 dataset with seed=42...", flush=True)
+    dataset = dataset.shuffle(seed=42)
+
+    # Re-index after shuffling (update extra_info index)
+    print("Re-indexing AIME_2024 dataset...", flush=True)
+    def update_index(example, idx):
+        example["extra_info"]["index"] = idx
+        return example
+    dataset = dataset.map(update_index, with_indices=True)
+
     return dataset
 
 
