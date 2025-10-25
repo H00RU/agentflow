@@ -89,7 +89,9 @@ class AIMEEvaluator:
         logger.info(f"[AIMEEvaluator] Total problems: {len(self.problems)}")
 
         # Split dataset
-        all_task_ids = sorted(list(self.problems.keys()))
+        # NOTE: Keep insertion order from jsonl (already shuffled with seed=42)
+        # Do NOT sort to preserve the shuffle
+        all_task_ids = list(self.problems.keys())
         total = len(all_task_ids)
         train_size = int(total * 0.8)
 
