@@ -2,7 +2,7 @@
 # 日志同步脚本 - 独立运行，不依赖Claude连接
 
 LOG_SOURCE_DIR="/content/agentflow/integration/logs/"
-LOG_DEST_DIR="/content/drive/MyDrive/agentflow/outputs/minimal_test/logs/"
+LOG_DEST_DIR="/content/drive/MyDrive/agentflow/outputs/full_test/logs/"
 
 # 创建目标目录（如果不存在）
 mkdir -p "$LOG_DEST_DIR"
