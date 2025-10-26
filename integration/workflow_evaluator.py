@@ -33,7 +33,8 @@ class WorkflowEvaluator:
         self,
         dataset: str = "HumanEval",
         sample_size: int = 3,
-        timeout_per_problem: int = 30
+        timeout_per_problem: int = 30,
+        train_test_split: float = 0.8
     ):
         """
         初始化evaluator
@@ -42,10 +43,12 @@ class WorkflowEvaluator:
             dataset: 数据集名称
             sample_size: 测试样本数量
             timeout_per_problem: 每个问题的超时时间(秒)
+            train_test_split: Ratio of training data (default: 0.8 = 80% train, 20% test)
         """
         self.dataset = dataset
         self.sample_size = sample_size
         self.timeout_per_problem = timeout_per_problem
+        self.train_test_split = train_test_split
 
         # 加载HumanEval数据集
         self.problems = self._load_humaneval_problems()
@@ -125,9 +128,9 @@ class WorkflowEvaluator:
         if num_problems is None:
             num_problems = min(self.sample_size, len(self.problems))
 
-        # 划分训练集和测试集 (80/20 split)
+        # 划分训练集和测试集 (configurable split)
         all_problem_ids = list(self.problems.keys())
-        train_size = int(len(all_problem_ids) * 0.8)
+        train_size = int(len(all_problem_ids) * self.train_test_split)
         train_ids = all_problem_ids[:train_size]
         test_ids = all_problem_ids[train_size:]
 

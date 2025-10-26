@@ -17,6 +17,9 @@ environment:
     - "AIME"
   data_path: "/content/agentflow/AFlow/data/AIME_2024.jsonl"
 
+  # 数据集划分比例（泛用配置，适用于所有数据集）
+  train_test_split: 0.8  # 80% 训练集，20% 测试集（可根据数据集调整）
+
   # 优化LLM配置 - 提升推理能力
   opt_llm_config:
     model: "gpt-4o-mini"

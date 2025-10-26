@@ -25,17 +25,20 @@ class AIMEEvaluator:
         self,
         llm_config: Dict[str, Any],
         dataset_path: str = "/content/agentflow/AFlow/data/AIME_2024.jsonl",
-        sample_size: int = 30
+        sample_size: int = 30,
+        train_test_split: float = 0.8
     ):
         """
         Args:
             llm_config: LLM configuration for workflow execution
             dataset_path: Path to AIME dataset JSONL file
             sample_size: Default number of problems to test (default: 30)
+            train_test_split: Ratio of training data (default: 0.8 = 80% train, 20% test)
         """
         self.llm_config = llm_config
         self.dataset_path = dataset_path
         self.sample_size = sample_size
+        self.train_test_split = train_test_split
         self.problems = {}
         self.dataset_type = "AIME"
 
@@ -93,7 +96,7 @@ class AIMEEvaluator:
         # Do NOT sort to preserve the shuffle
         all_task_ids = list(self.problems.keys())
         total = len(all_task_ids)
-        train_size = int(total * 0.8)
+        train_size = int(total * self.train_test_split)
 
         if use_test_set:
             available_ids = all_task_ids[train_size:]

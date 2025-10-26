@@ -65,7 +65,8 @@ class DeepWorkflowEnv:
         workflow_sample_count: int = None,
         use_dynamic_optimizer: bool = False,
         validation_rounds: int = 3,
-        rl_weight: float = 0.5
+        rl_weight: float = 0.5,
+        train_test_split: float = 0.8
     ):
         """
         初始化真实workflow环境
@@ -83,6 +84,7 @@ class DeepWorkflowEnv:
             use_dynamic_optimizer: 是否使用动态优化器 (默认False保持向后兼容)
             validation_rounds: 验证轮数 (仅动态模式)
             rl_weight: RL权重 (仅动态模式，0.0-1.0)
+            train_test_split: 训练/测试集划分比例 (默认0.8 = 80% train, 20% test)
         """
         self.dataset = dataset
         self.opt_llm_config = opt_llm_config
@@ -92,6 +94,7 @@ class DeepWorkflowEnv:
         self.sample = sample
         self.max_rounds = max_rounds
         self.workflow_sample_count = workflow_sample_count
+        self.train_test_split = train_test_split
         self.use_dynamic_optimizer = use_dynamic_optimizer
         self.validation_rounds = validation_rounds
         self.rl_weight = rl_weight
@@ -133,7 +136,8 @@ class DeepWorkflowEnv:
             self.evaluator = WorkflowEvaluator(
                 dataset=self.dataset,
                 sample_size=sample,
-                timeout_per_problem=30
+                timeout_per_problem=30,
+                train_test_split=self.train_test_split
             )
             logger.info(f"[DeepWorkflowEnv] Using WorkflowEvaluator for {self.dataset}")
 
@@ -230,7 +234,8 @@ class DeepWorkflowEnv:
             return AIMEEvaluator(
                 llm_config=llm_config,
                 dataset_path="/content/agentflow/AFlow/data/AIME_2024.jsonl",
-                sample_size=self.sample  # 传递配置的 sample 参数
+                sample_size=self.sample,  # 传递配置的 sample 参数
+                train_test_split=self.train_test_split  # 传递配置的 train_test_split 参数
             )
         else:
             raise ValueError(f"No custom evaluator for dataset: {dataset}")
@@ -656,7 +661,8 @@ def create_deep_workflow_env(dataset, opt_llm_config, exec_llm_config, **kwargs)
         workflow_sample_count=kwargs.get('workflow_sample_count'),
         use_dynamic_optimizer=kwargs.get('use_dynamic_optimizer', False),
         validation_rounds=kwargs.get('validation_rounds', 3),
-        rl_weight=kwargs.get('rl_weight', 0.5)
+        rl_weight=kwargs.get('rl_weight', 0.5),
+        train_test_split=kwargs.get('train_test_split', 0.8)
     )
 
 

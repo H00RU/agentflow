@@ -213,9 +213,10 @@ class RealWorkflowTrainer:
         parser = WorkflowParser()
         test_dataset = self.train_datasets[0] if self.train_datasets else "AIME"
 
-        # 计算测试集大小（通用方式：使用数据集的20%作为测试集）
+        # 计算测试集大小（通用方式：使用配置的train_test_split）
+        train_test_split = self.env_config.get('train_test_split', 0.8)
         total_problems = len(env.evaluator.problems)
-        train_size = int(total_problems * 0.8)
+        train_size = int(total_problems * train_test_split)
         test_size = total_problems - train_size
         # 允许config覆盖
         num_test_problems = self.env_config.get('test_problems', test_size)
@@ -415,6 +416,7 @@ IMPORTANT: Output your workflow in the required XML format with <workflow_modifi
         sample = self.env_config.get('sample', 3)
         max_rounds = self.env_config.get('max_rounds', 10)
         workflow_sample_count = self.env_config.get('workflow_sample_count')
+        train_test_split = self.env_config.get('train_test_split', 0.8)
 
         # Create training environments
         for dataset in self.train_datasets:
@@ -430,7 +432,8 @@ IMPORTANT: Output your workflow in the required XML format with <workflow_modifi
                 sample=sample,
                 max_rounds=max_rounds,
                 workspace_path=str(self.workflow_dir / dataset),
-                workflow_sample_count=workflow_sample_count
+                workflow_sample_count=workflow_sample_count,
+                train_test_split=train_test_split
             )
 
             logger.info(f"✅ REAL Workflow Environment created")
