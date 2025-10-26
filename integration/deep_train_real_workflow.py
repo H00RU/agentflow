@@ -192,7 +192,10 @@ class RealWorkflowTrainer:
 
     def _evaluate_on_test_set(self, env):
         """
-        在测试集上评估最佳workflow
+        在测试集上评估训练好的policy生成的workflow
+
+        改进: 让训练好的policy生成新的workflow并在测试集上评估
+        这样才能真正测试policy是否学会了workflow设计能力
 
         Args:
             env: environment实例
@@ -200,48 +203,197 @@ class RealWorkflowTrainer:
         Returns:
             测试集上的平均分数
         """
-        # 获取最佳workflow
+        logger.info("[Trainer] 🧪 Evaluating trained policy on TEST set...")
+        logger.info("[Trainer] Policy will generate a NEW workflow for test evaluation")
+
+        from workflow_parser import WorkflowParser
+        import importlib.util
+        import asyncio
+
+        parser = WorkflowParser()
+        test_dataset = self.train_datasets[0] if self.train_datasets else "AIME"
+
+        # 计算测试集大小（通用方式：使用数据集的20%作为测试集）
+        total_problems = len(env.evaluator.problems)
+        train_size = int(total_problems * 0.8)
+        test_size = total_problems - train_size
+        # 允许config覆盖
+        num_test_problems = self.env_config.get('test_problems', test_size)
+        logger.info(f"[Trainer] Dataset: {total_problems} total, {train_size} train, {test_size} test")
+        logger.info(f"[Trainer] Will evaluate on {num_test_problems} test problems")
+
+        try:
+            # 步骤1: 构造测试observation (包含训练摘要但不泄露测试集信息)
+            test_obs = self._construct_test_observation(env, test_dataset)
+            logger.info(f"[Trainer] Test observation constructed (length: {len(test_obs)} chars)")
+
+            # 步骤2: 使用训练好的policy生成workflow描述
+            logger.info("[Trainer] Generating workflow using trained policy...")
+            workflow_desc, _, _, _ = self.policy.get_action_and_value(
+                obs=test_obs,
+                max_new_tokens=300,
+                temperature=0.7  # 保持一定随机性
+            )
+            logger.info(f"[Trainer] Policy generated workflow description:")
+            logger.info(f"[Trainer] {workflow_desc[:200]}...")  # 打印前200字符
+
+            # 步骤3: 解析workflow描述
+            logger.info("[Trainer] Parsing workflow description...")
+            workflow_spec = parser.parse_qwen_output(
+                workflow_desc,
+                dataset_type=test_dataset,
+                sample_count=self.env_config.get('workflow_sample_count')
+            )
+
+            if workflow_spec is None:
+                logger.warning("[Trainer] Failed to parse policy output, falling back to best_workflow")
+                return self._evaluate_fallback_workflow(env, num_test_problems)
+
+            logger.info(f"[Trainer] ✓ Parsed workflow: {len(workflow_spec.operators)} operators, {len(workflow_spec.steps)} steps")
+            logger.info(f"[Trainer]   Operators: {workflow_spec.operators}")
+
+            # 步骤4: 保存workflow到文件
+            test_workflow_path = parser.save_workflow_to_file(
+                workflow_spec,
+                "policy_test_eval",
+                str(self.workflow_dir / "test_evaluation")
+            )
+            logger.info(f"[Trainer] ✓ Workflow saved to {test_workflow_path}")
+
+            # 步骤5: 导入并实例化workflow
+            spec = importlib.util.spec_from_file_location("test_workflow", test_workflow_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            WorkflowClass = module.Workflow
+            workflow = WorkflowClass(
+                name="PolicyTestEvalWorkflow",
+                llm_config=self.env_config['exec_llm_config'],
+                dataset=test_dataset
+            )
+
+            # 步骤6: 在测试集上执行
+            logger.info(f"[Trainer] Executing policy-generated workflow on {num_test_problems} TEST problems...")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            result = loop.run_until_complete(
+                env.evaluator.evaluate_workflow(
+                    workflow,
+                    num_problems=num_test_problems,
+                    use_test_set=True,
+                    random_sample=False  # 固定取前N个测试集问题
+                )
+            )
+
+            loop.close()
+
+            test_score = result.get('pass_at_k', 0.0)
+            logger.info(f"[Trainer] ✅ Policy-generated workflow TEST score: {test_score:.4f}")
+
+            return test_score
+
+        except Exception as e:
+            logger.error(f"[Trainer] ❌ Error during policy test evaluation: {e}")
+            logger.warning("[Trainer] Falling back to best_workflow evaluation")
+            import traceback
+            traceback.print_exc()
+            return self._evaluate_fallback_workflow(env, num_test_problems)
+
+    def _construct_test_observation(self, env, dataset: str) -> str:
+        """
+        构造测试observation
+
+        包含训练摘要信息但不泄露测试集内容，让policy能够基于训练经验生成workflow
+
+        Args:
+            env: environment实例
+            dataset: 数据集名称
+
+        Returns:
+            测试observation字符串
+        """
+        # 获取训练统计信息
+        best_score = getattr(env, 'best_score', 0.0)
+        best_operators = []
+        if hasattr(env, 'best_workflow') and env.best_workflow:
+            best_operators = env.best_workflow.operators
+
+        # 可用的operators
+        available_operators = self.env_config.get('operators', ['Custom', 'ScEnsemble'])
+
+        # 构造observation
+        obs = f"""Dataset: {dataset}
+Task: Design an optimized workflow for TEST evaluation
+
+Training Summary:
+- Best training score achieved: {best_score:.4f}
+- Best performing operators: {', '.join(best_operators) if best_operators else 'N/A'}
+- Available operators: {', '.join(available_operators)}
+
+Your task: Generate a high-quality workflow that generalizes well to unseen test problems.
+Focus on designing a robust workflow that can handle the complexity of {dataset} problems.
+
+IMPORTANT: Output your workflow in the required XML format with <workflow_modification>, <operators>, and <workflow_steps>.
+"""
+
+        return obs
+
+    def _evaluate_fallback_workflow(self, env, num_test_problems: int):
+        """
+        Fallback方法: 使用训练中找到的best_workflow进行测试
+
+        这是原始的测试方法，当policy生成失败时使用
+
+        Args:
+            env: environment实例
+            num_test_problems: 测试问题数量
+
+        Returns:
+            测试集上的分数
+        """
+        logger.info("[Trainer] Using fallback: evaluating best_workflow from training")
+
         if env.best_workflow is None:
-            logger.warning("[Trainer] No best workflow found, skipping test evaluation")
+            logger.warning("[Trainer] No best workflow found, returning 0.0")
             return 0.0
 
-        # 创建workflow实例
         from workflow_parser import WorkflowParser
+        import importlib.util
+        import asyncio
+
         parser = WorkflowParser()
+        test_dataset = self.train_datasets[0] if self.train_datasets else "AIME"
 
         # 保存临时workflow
         test_workflow_path = parser.save_workflow_to_file(
             env.best_workflow,
-            "test_eval",
+            "fallback_test_eval",
             str(self.workflow_dir / "temp")
         )
 
         # 导入并测试
-        import importlib.util
         spec = importlib.util.spec_from_file_location("test_workflow", test_workflow_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
         WorkflowClass = module.Workflow
-        # 使用第一个训练数据集进行测试
-        test_dataset = self.train_datasets[0] if self.train_datasets else "AIME"
         workflow = WorkflowClass(
-            name="TestEvalWorkflow",
+            name="FallbackTestEvalWorkflow",
             llm_config=self.env_config['exec_llm_config'],
             dataset=test_dataset
         )
 
-        # 在测试集上评估（10个问题）
-        import asyncio
+        # 在测试集上评估
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         result = loop.run_until_complete(
             env.evaluator.evaluate_workflow(
                 workflow,
-                num_problems=10,  # 测试集上评估10个问题
-                use_test_set=True,  # 使用测试集
-                random_sample=False  # 固定前10个测试集问题
+                num_problems=num_test_problems,
+                use_test_set=True,
+                random_sample=False
             )
         )
 

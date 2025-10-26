@@ -2,10 +2,10 @@ device: "cuda"
 # 改进配置 - 增加训练量以提升性能
 # 修复：Revise触发条件已优化，增加训练epochs和数据量
 total_epochs: 10  # 增加到10个epoch以充分学习
-episodes_per_epoch: 3  # 每个epoch 3个episode,增加经验收集
-update_frequency: 3  # 每3个episode更新一次
+episodes_per_epoch: 6  # 每个epoch 6个episode (改用单环境，增加episodes保持样本数)
+update_frequency: 1  # 每1个episode更新一次（对齐VERL，频繁更新）
 eval_episodes: 2  # 评估2个episode,更稳定的评估
-save_frequency: 2  # 每2个epoch保存一次checkpoint
+save_frequency: 1  # 每1个epoch保存一次checkpoint（确保有checkpoint）
 
 output_dir: "/content/drive/MyDrive/agentflow/outputs/full_test"
 experience_pool_size: 500  # 增加经验池大小
@@ -39,7 +39,7 @@ environment:
     - "Review"           # 审查operator
     - "Revise"           # 修订operator - 触发条件已修复！
 
-  env_num: 2  # 2个并行环境,增加探索
+  env_num: 1  # 单环境,避免API并发,增加状态多样性
   group_n: 1
   max_rounds: 5  # 每个episode最多5轮
   validation_rounds: 3
