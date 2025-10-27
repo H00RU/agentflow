@@ -502,44 +502,113 @@ class RLTrainer:
             'clip_fraction': 0.0
         }
 
+        # Get observations for re-computing log_probs and values
+        observations = data['observations']
+
         for epoch in range(self.ppo_epochs):
-            # Re-evaluate policy (forward pass)
-            # For simplicity, we'll use the stored observations
-            # In practice, you might want to batch this
+            # ==================================================
+            # FULL PPO UPDATE IMPLEMENTATION
+            # ==================================================
 
-            # Simplified: compute loss on full batch
-            # TODO: Implement mini-batch updates for large rollouts
+            # 1. Re-compute log_probs and values with gradients
+            # Tokenize all observations
+            inputs_list = []
+            for obs in observations:
+                inputs = self.policy.tokenizer(
+                    obs,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=1024
+                ).to(self.device)
+                inputs_list.append(inputs)
 
-            # Compute new log probs and values by re-running forward pass
-            # For now, use simplified version that doesn't require re-tokenization
+            # Batch forward pass (simple version: process sequentially)
+            new_log_probs_list = []
+            new_values_list = []
+            entropies_list = []
 
-            # Use old log_probs for policy loss (simplified - no actual policy update)
-            # This is a placeholder until full PPO is implemented
-            # Policy loss: maximize advantage-weighted log probs
-            policy_loss = -(log_probs_old.detach() * advantages * response_masks).sum() / response_masks.sum()
+            for i, inputs in enumerate(inputs_list):
+                # Forward pass with gradients
+                outputs = self.policy.forward(
+                    input_ids=inputs['input_ids'],
+                    attention_mask=inputs['attention_mask'],
+                    response_mask=response_masks[i:i+1]
+                )
 
-            # Value loss: MSE between values and returns
-            # Detach returns to avoid backprop through advantage computation
-            value_loss = F.mse_loss(values.squeeze(1), returns.detach().squeeze(1))
+                new_log_probs_list.append(outputs['log_probs'])
+                new_values_list.append(outputs['values'])
 
-            # Entropy (approximation)
-            entropy = -(log_probs_old.detach() * torch.exp(log_probs_old.detach()) * response_masks).sum() / response_masks.sum()
+                # Compute entropy from logits
+                logits = outputs['logits'][:, :-1, :]  # Shift for next-token prediction
+                probs = F.softmax(logits, dim=-1)
+                entropy = -(probs * F.log_softmax(logits, dim=-1)).sum(dim=-1)  # (bs, seq_len-1)
+                entropy = F.pad(entropy, (0, 1), value=0.0)  # Pad to match seq_len
+                entropy = entropy * response_masks[i:i+1]  # Apply mask
+                entropies_list.append(entropy)
 
-            # Total loss (only value_loss has gradients in this simplified version)
-            # Policy update would require re-running forward pass with gradients
-            total_loss = self.value_coef * value_loss
+            # Stack all outputs
+            new_log_probs = torch.cat(new_log_probs_list, dim=0)  # (bs, seq_len)
+            new_values = torch.cat(new_values_list, dim=0)  # (bs, seq_len)
+            new_entropies = torch.cat(entropies_list, dim=0)  # (bs, seq_len)
 
-            # Backpropagation
+            # 2. Compute PPO ratio
+            # ratio = exp(new_log_probs - old_log_probs)
+            ratio = torch.exp(new_log_probs - log_probs_old)  # (bs, seq_len)
+
+            # 3. Compute policy loss with PPO clipping
+            # Unclipped policy loss
+            policy_loss_unclipped = -advantages * ratio
+
+            # Clipped policy loss
+            ratio_clipped = torch.clamp(ratio, 1.0 - self.ppo_clip, 1.0 + self.ppo_clip)
+            policy_loss_clipped = -advantages * ratio_clipped
+
+            # Take the maximum (most conservative)
+            policy_loss_per_token = torch.max(policy_loss_unclipped, policy_loss_clipped)
+
+            # Apply response mask and average
+            policy_loss = (policy_loss_per_token * response_masks).sum() / response_masks.sum()
+
+            # 4. Compute value loss
+            # Clip value predictions for stability
+            values_clipped = values + torch.clamp(
+                new_values - values,
+                -self.ppo_clip,
+                self.ppo_clip
+            )
+
+            # Value loss (both clipped and unclipped)
+            value_loss_unclipped = F.mse_loss(new_values, returns.detach(), reduction='none')
+            value_loss_clipped = F.mse_loss(values_clipped, returns.detach(), reduction='none')
+            value_loss_per_token = torch.max(value_loss_unclipped, value_loss_clipped)
+
+            # Apply mask and average
+            value_loss = (value_loss_per_token * response_masks).sum() / response_masks.sum()
+
+            # 5. Compute entropy bonus
+            entropy = (new_entropies * response_masks).sum() / response_masks.sum()
+
+            # 6. Total loss
+            total_loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy
+
+            # 7. Compute KL divergence for monitoring
+            with torch.no_grad():
+                approx_kl = ((ratio - 1) - torch.log(ratio)) * response_masks
+                approx_kl = approx_kl.sum() / response_masks.sum()
+
+                # Clip fraction
+                clip_fraction = ((ratio < 1.0 - self.ppo_clip) | (ratio > 1.0 + self.ppo_clip)).float() * response_masks
+                clip_fraction = clip_fraction.sum() / response_masks.sum()
+
+            # 8. Backpropagation
             self.optimizer.zero_grad()
-            if total_loss.requires_grad:
-                total_loss.backward()
-            else:
-                print("[Warning] total_loss does not require grad, skipping backward pass")
+            total_loss.backward()
 
-            # Gradient clipping
+            # 9. Gradient clipping
             torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
 
-            # Update weights
+            # 10. Update weights
             self.optimizer.step()
 
             # Record stats
@@ -547,6 +616,8 @@ class RLTrainer:
             update_stats['value_loss'] += value_loss.item()
             update_stats['entropy'] += entropy.item()
             update_stats['total_loss'] += total_loss.item()
+            update_stats['approx_kl'] += approx_kl.item()
+            update_stats['clip_fraction'] += clip_fraction.item()
 
         # Average over epochs
         for key in update_stats:
@@ -555,10 +626,14 @@ class RLTrainer:
         # Clear buffer
         self.buffer.clear()
 
-        print(f"[RLTrainer] Update completed:")
+        print(f"[RLTrainer] ✅ PPO Update completed:")
         print(f"  - Policy loss: {update_stats['policy_loss']:.4f}")
         print(f"  - Value loss: {update_stats['value_loss']:.4f}")
+        print(f"  - Entropy: {update_stats['entropy']:.4f}")
         print(f"  - Total loss: {update_stats['total_loss']:.4f}")
+        print(f"  - Approx KL: {update_stats['approx_kl']:.6f}")
+        print(f"  - Clip fraction: {update_stats['clip_fraction']:.4f}")
+        print(f"[RLTrainer] 🎉 Policy (Qwen LoRA) and Value Head both updated!")
 
         return update_stats
 
