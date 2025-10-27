@@ -1,0 +1,82 @@
+device: "cuda"
+
+# 快速GIGPO测试配置 - 最小化参数快速验证
+total_epochs: 1  # 只跑1个epoch
+episodes_per_epoch: 1  # 只跑1个episode
+update_frequency: 1  # 每1个episode更新一次
+save_frequency: 1  # 测试保存功能
+
+output_dir: "/content/agentflow/outputs/gigpo_test"
+experience_pool_size: 100
+
+environment:
+  train_datasets:
+    - "AIME"
+  test_datasets:
+    - "AIME"
+  data_path: "/content/agentflow/AFlow/data/AIME_2024.jsonl"
+
+  train_test_split: 0.8
+
+  # LLM配置
+  opt_llm_config:
+    model: "gpt-4o-mini"
+    key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    temperature: 0.7
+
+  exec_llm_config:
+    model: "gpt-4o-mini"
+    key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    temperature: 0.7
+
+  # 简化的operators
+  operators:
+    - "Custom"
+    - "ScEnsemble"
+
+  env_num: 1  # 单环境
+  group_n: 1
+  max_rounds: 2  # 只跑2轮（快速测试）
+  validation_rounds: 1
+  sample: 3  # 只测3个问题（快速）
+
+  # 关键：使用静态模式测试GIGPO
+  use_dynamic_optimizer: false
+  workflow_sample_count: 3
+
+rl:
+  policy:
+    model_path: "/root/models/Qwen2.5-7B-Instruct"
+    use_lora: true
+    lora_r: 16
+    lora_alpha: 32
+    value_head_dim: 1024
+
+  # RL参数
+  learning_rate: 0.00001
+  batch_size: 2  # 小batch
+  ppo_epochs: 1  # 快速测试
+  ppo_clip: 0.2
+  gamma: 0.99
+  gae_lambda: 0.95
+  value_coef: 0.5
+  entropy_coef: 0.01
+  gradient_clip: 1.0
+
+  # 关键：启用GiGPO测试
+  gigpo:
+    enable: true
+    epsilon: 0.000001
+    step_advantage_w: 1.0
+    mode: "mean_norm"
+    enable_similarity: false  # 简化测试
+    similarity_thresh: 0.95
+    workflow_similarity_thresh: 0.8
+
+logging:
+  level: "INFO"
+
+debug:
+  verbose_env: true
