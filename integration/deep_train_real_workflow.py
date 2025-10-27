@@ -98,15 +98,18 @@ class RealWorkflowTrainer:
 
         self.state_manager = StateManager()
 
-        # Get prompt manager
-        self.prompt_manager = get_prompt_manager()
-
         # Environment configuration
         self.env_config = config.get('environment', {})
         # 从配置读取训练数据集，不提供默认值（强制用户在配置文件中指定）
         self.train_datasets = self.env_config.get('train_datasets', [])
         if not self.train_datasets:
             raise ValueError("Please specify 'train_datasets' in config file under 'environment' section")
+
+        # Get prompt manager (根据第一个训练数据集创建)
+        # 如果有多个数据集，使用第一个数据集的prompt manager
+        primary_dataset = self.train_datasets[0] if self.train_datasets else "HumanEval"
+        self.prompt_manager = get_prompt_manager(dataset=primary_dataset)
+        print(f"Using prompt manager for dataset: {primary_dataset}")
 
         # RL configuration
         self.rl_config = config.get('rl', {})

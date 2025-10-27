@@ -593,9 +593,29 @@ class DeepWorkflowEnv:
         history_summary: str,
         last_score: Optional[float] = None
     ) -> str:
-        """构造给Qwen的观测"""
+        """构造给Qwen的观测，根据dataset生成相应的任务描述"""
+        # 根据dataset生成任务描述
+        dataset_upper = self.dataset.upper()
+        if dataset_upper == "AIME":
+            task_desc = "Design and optimize agent workflow for solving AIME mathematical problems"
+            focus_points = """1. Which operators to use for mathematical reasoning
+2. How to combine them effectively for problem-solving
+3. Using ensemble methods for robust solutions
+4. How to improve upon previous attempts"""
+        elif dataset_upper == "HUMANEVAL":
+            task_desc = "Design and optimize agent workflow for code generation"
+            focus_points = """1. Which operators to use for code generation
+2. How to combine them effectively
+3. How to improve upon previous attempts"""
+        else:
+            # 通用描述
+            task_desc = f"Design and optimize agent workflow for {self.dataset} tasks"
+            focus_points = """1. Which operators to use
+2. How to combine them effectively
+3. How to improve upon previous attempts"""
+
         obs = f"""Dataset: {self.dataset}
-Task: Design and optimize agent workflow for code generation
+Task: {task_desc}
 Round: {round_num}/{self.max_rounds}
 
 Current Best Score: {best_score:.4f}"""
@@ -611,9 +631,7 @@ Available Operators:
 {history_summary}
 
 Your task: Generate a workflow description that will be converted to executable code and tested on real {self.dataset} problems. Focus on:
-1. Which operators to use
-2. How to combine them effectively
-3. How to improve upon previous attempts
+{focus_points}
 """
 
         return obs

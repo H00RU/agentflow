@@ -197,6 +197,11 @@ class TrainableQwenPolicy(nn.Module):
 
         # Apply response mask if provided
         if response_mask is not None:
+            # Fix: The last position is padded and should be masked out
+            # Clone to avoid modifying the original mask
+            response_mask = response_mask.clone()
+            response_mask[:, -1] = 0.0  # Mask out the padded position
+
             token_log_probs = token_log_probs * response_mask
             values = values * response_mask
 
@@ -263,6 +268,21 @@ class TrainableQwenPolicy(nn.Module):
         # Create response mask (only for generated tokens)
         response_mask = torch.zeros_like(full_ids, dtype=torch.float32)
         response_mask[:, input_ids.shape[1]:] = 1.0
+
+        # Fix: Exclude padding tokens from response mask
+        if self.tokenizer.pad_token_id is not None:
+            pad_mask = (full_ids != self.tokenizer.pad_token_id).float()
+            response_mask = response_mask * pad_mask
+
+        # Fix: Exclude tokens after EOS (keep first EOS, mask everything after)
+        if self.tokenizer.eos_token_id is not None:
+            # Find EOS positions: 1 where there's an EOS, 0 elsewhere
+            eos_positions = (full_ids == self.tokenizer.eos_token_id).float()
+            # Cumulative sum: positions after first EOS will have value > 1
+            eos_cumsum = eos_positions.cumsum(dim=1)
+            # Keep only positions where cumsum <= 1 (before or at first EOS)
+            eos_mask = (eos_cumsum <= 1).float()
+            response_mask = response_mask * eos_mask
 
         # Forward pass to get log_probs and values
         outputs = self.forward(
