@@ -1,13 +1,14 @@
 device: "cuda"
-# 超快速测试配置 - 3个epoch快速验证
-total_epochs: 3  # 减少到3个epoch
-episodes_per_epoch: 2  # 每个epoch 2个episode
-update_frequency: 2  # 每2个episode更新一次
-eval_episodes: 1  # 评估1个episode
-save_frequency: 1
+# 快速验证配置 - 1个episode后保存checkpoint用于评估
+# 基于aime_full_test.yaml，仅修改训练量用于快速验证
+total_epochs: 1  # 只跑1个epoch（快速验证）
+episodes_per_epoch: 1  # 只跑1个episode（约6小时）
+update_frequency: 1  # 每1个episode更新一次（对齐VERL，频繁更新）
+eval_episodes: 2  # 评估2个episode,更稳定的评估
+save_frequency: 1  # 每1个epoch保存一次checkpoint（确保有checkpoint）
 
 output_dir: "/content/drive/MyDrive/agentflow/outputs/minimal_test"
-experience_pool_size: 300
+experience_pool_size: 500  # 增加经验池大小
 
 environment:
   train_datasets:
@@ -15,6 +16,9 @@ environment:
   test_datasets:
     - "AIME"
   data_path: "/content/agentflow/AFlow/data/AIME_2024.jsonl"
+
+  # 数据集划分比例（泛用配置，适用于所有数据集）
+  train_test_split: 0.8  # 80% 训练集，20% 测试集（可根据数据集调整）
 
   # 优化LLM配置 - 提升推理能力
   opt_llm_config:
@@ -36,9 +40,9 @@ environment:
     - "ScEnsemble"       # 自一致性集成
     - "Test"             # 测试operator
     - "Review"           # 审查operator
-    - "Revise"           # 修订operator
+    - "Revise"           # 修订operator - 触发条件已修复！
 
-  env_num: 2  # 2个并行环境,增加探索
+  env_num: 1  # 单环境,避免API并发,增加状态多样性
   group_n: 1
   max_rounds: 5  # 每个episode最多5轮
   validation_rounds: 3
@@ -48,9 +52,19 @@ environment:
   use_dynamic_optimizer: true  # 启用动态优化（MCTS + RL）
   rl_weight: 0.5  # RL权重，平衡MCTS UCB和RL Q-value
 
+  # MCTS + Qwen直接生成配置（已启用）
+  use_qwen_code_generation: true  # ✅ 启用：让Qwen直接生成代码（无GPT-4 fallback）
+  qwen_max_retries: 2  # Qwen语法错误时的最大重试次数
+  #
+  # MCTS + Qwen直接生成 = Dynamic Mode (MCTS) + Qwen代码生成
+  # - 保留完整MCTS树搜索
+  # - 用Qwen完全自主生成代码（失败时通过负奖励学习）
+  # - 无GPT-4干预，坚持项目初心
+  # - 降低成本，完全对齐原版AFlow架构
+
   # 新增：workflow内部采样数配置
   # 这控制ScEnsemble生成多少个候选方案
-  workflow_sample_count: 15  # 快速测试使用15次采样（平衡速度和质量）
+  workflow_sample_count: 15  # 使用15次采样（平衡速度和质量）
 
 rl:
   policy:
@@ -61,24 +75,24 @@ rl:
     value_head_dim: 1024
 
   # RL训练参数 - 针对AIME小数据集优化（24个训练样本）
-  learning_rate: 0.0001  # 快速测试用稍高学习率
-  batch_size: 4  # 小batch，适合少样本
-  ppo_epochs: 3  # 快速测试减少epochs
+  learning_rate: 0.00003  # 更低学习率，适合高难度题目（从0.0001降低）
+  batch_size: 4  # 小batch，适合少样本（24个训练样本，从8降低）
+  ppo_epochs: 4  # 增加PPO epochs以充分优化
   ppo_clip: 0.2
   gamma: 0.99
   gae_lambda: 0.95
   value_coef: 0.5
-  entropy_coef: 0.05  # 适度探索
+  entropy_coef: 0.03  # 降低探索性，AIME需要精确策略（从0.1降低）
   gradient_clip: 1.0
 
   gigpo:
     enable: true
     epsilon: 0.000001
-    step_advantage_w: 1.0  # 充分利用步骤级优势
+    step_advantage_w: 1.0  # 充分利用步骤级优势（从0.8提高）
     mode: "mean_norm"
     enable_similarity: true
-    similarity_thresh: 0.95  # 避免重复探索
-    workflow_similarity_thresh: 0.8  # 避免重复workflow
+    similarity_thresh: 0.95  # 新增：避免重复探索相似状态
+    workflow_similarity_thresh: 0.8  # 新增：避免重复相似workflow
 
 logging:
   level: "INFO"

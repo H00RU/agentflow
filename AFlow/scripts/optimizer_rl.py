@@ -60,6 +60,9 @@ class RLEnhancedOptimizer(Optimizer):
         shared_experience_pool: Optional[Any] = None,
         state_manager: Optional[Any] = None,
         enable_state_tracking: bool = True,
+        use_qwen_code_generation: bool = False,
+        qwen_code_generator=None,
+        qwen_max_retries: int = 2,
         **kwargs
     ):
         """
@@ -73,6 +76,9 @@ class RLEnhancedOptimizer(Optimizer):
             shared_experience_pool: Shared experience pool instance
             state_manager: State manager instance
             enable_state_tracking: Whether to track WorkflowState objects
+            use_qwen_code_generation: Whether to use Qwen to generate code directly (MCTS + Qwen)
+            qwen_code_generator: Qwen policy instance for code generation
+            qwen_max_retries: Maximum retries for Qwen code generation when syntax errors occur
             **kwargs: Arguments passed to base Optimizer
         """
         super().__init__(**kwargs)
@@ -81,6 +87,11 @@ class RLEnhancedOptimizer(Optimizer):
         self.rl_policy = rl_policy
         self.use_rl_guidance = use_rl_guidance
         self.rl_weight = rl_weight
+
+        # Qwen direct code generation (MCTS + Qwen生成代码)
+        self.use_qwen_code_generation = use_qwen_code_generation
+        self.qwen_code_generator = qwen_code_generator or rl_policy
+        self.qwen_max_retries = qwen_max_retries
 
         # Shared components
         if shared_experience_pool is None and SharedExperiencePool is not None:
@@ -332,6 +343,8 @@ class RLEnhancedOptimizer(Optimizer):
         Generate new workflow with RL policy suggestions
         使用 RL 策略建议生成新的工作流
 
+        MCTS+Qwen实现：如果启用use_qwen_code_generation，则让Qwen直接生成完整代码
+
         Args:
             experience: Formatted experience string
             sample: Selected parent round data
@@ -343,6 +356,63 @@ class RLEnhancedOptimizer(Optimizer):
         Returns:
             Dict: Response with modification, graph, and prompt
         """
+        # MCTS + Qwen: 使用Qwen直接生成代码（无GPT-4 fallback）
+        if self.use_qwen_code_generation and self.qwen_code_generator is not None:
+            logger.info("[RLEnhancedOptimizer] 🎯 MCTS + Qwen: Using Qwen to generate code directly (no GPT-4 fallback)")
+
+            # 尝试使用Qwen生成代码
+            try:
+                qwen_response = await self._generate_code_with_qwen(
+                    experience, sample, graph, prompt, operator_description, log_data,
+                    max_retries=self.qwen_max_retries
+                )
+
+                if qwen_response is not None:
+                    logger.info("[RLEnhancedOptimizer] ✅ Qwen code generation successful")
+                    return qwen_response
+                else:
+                    # ✅ 不fallback到GPT-4 - 返回失败workflow让Qwen通过负奖励学习
+                    logger.warning("[RLEnhancedOptimizer] ⚠️ Qwen failed to generate valid code after retries")
+                    logger.info("[RLEnhancedOptimizer] 📚 Returning empty workflow for negative reward signal")
+                    logger.info("[RLEnhancedOptimizer] 🎓 Qwen will learn from this failure through PPO")
+
+                    return {
+                        'modification': 'Failed to generate valid code - syntax errors after retries',
+                        'graph': '''class Workflow:
+    def __init__(self, name: str, llm_config, dataset: str) -> None:
+        self.name = name
+        self.dataset = dataset
+        from scripts.async_llm import create_llm_instance
+        self.llm = create_llm_instance(llm_config)
+
+    async def __call__(self, problem: str, entry_point=None):
+        # Empty workflow - failed code generation
+        # Will result in zero score and negative reward
+        return "", 0.0''',
+                        'prompt': '# No custom prompts - failed generation'
+                    }
+
+            except Exception as e:
+                logger.error(f"[RLEnhancedOptimizer] ❌ Exception in Qwen code generation: {e}")
+                logger.info("[RLEnhancedOptimizer] 📚 Returning empty workflow for negative reward signal")
+                logger.info("[RLEnhancedOptimizer] 🎓 Qwen will learn to avoid this error")
+
+                return {
+                    'modification': f'Code generation error: {str(e)[:200]}',
+                    'graph': '''class Workflow:
+    def __init__(self, name: str, llm_config, dataset: str) -> None:
+        self.name = name
+        self.dataset = dataset
+        from scripts.async_llm import create_llm_instance
+        self.llm = create_llm_instance(llm_config)
+
+    async def __call__(self, problem: str, entry_point=None):
+        # Empty workflow - exception during generation
+        return "", 0.0''',
+                    'prompt': '# No custom prompts - exception occurred'
+                }
+
+        # 原版流程：使用GPT-4生成代码（带或不带RL suggestion）
         # Get RL suggestion if available
         rl_suggestion = ""
         if self.rl_policy is not None:
@@ -368,7 +438,7 @@ class RLEnhancedOptimizer(Optimizer):
         else:
             enhanced_prompt = base_prompt
 
-        # Generate graph
+        # Generate graph with GPT-4
         return await self._generate_graph(enhanced_prompt)
 
     async def _generate_graph(self, graph_optimize_prompt: str) -> Dict[str, str]:
@@ -664,3 +734,319 @@ class RLEnhancedOptimizer(Optimizer):
         """
         self.use_rl_guidance = enabled
         logger.info(f"RL guidance {'enabled' if enabled else 'disabled'}")
+
+    def _extract_code_from_qwen(self, qwen_output: str) -> Optional[Dict[str, str]]:
+        """
+        从Qwen输出提取代码 - 完全对齐原版AFlow
+
+        原版AFlow期望LLM返回：
+        <modification>...</modification>
+        <graph>...</graph>
+        <prompt>...</prompt>
+
+        Args:
+            qwen_output: Qwen生成的输出
+
+        Returns:
+            {'graph': str, 'modification': str, 'prompt': str} 或 None
+        """
+        import re
+
+        result = {}
+
+        # 提取 modification
+        modification_pattern = r"<modification>(.*?)</modification>"
+        modification_match = re.search(modification_pattern, qwen_output, re.DOTALL)
+        if modification_match:
+            result['modification'] = modification_match.group(1).strip()
+        else:
+            result['modification'] = "No modification description provided"
+
+        # 提取 graph (必需)
+        graph_pattern = r"<graph>(.*?)</graph>"
+        graph_match = re.search(graph_pattern, qwen_output, re.DOTALL)
+        if not graph_match:
+            logger.error("[RLEnhancedOptimizer] No <graph> tag found in Qwen output")
+            return None
+
+        result['graph'] = graph_match.group(1).strip()
+
+        # 提取 prompt (可选)
+        prompt_pattern = r"<prompt>(.*?)</prompt>"
+        prompt_match = re.search(prompt_pattern, qwen_output, re.DOTALL)
+        if prompt_match:
+            result['prompt'] = prompt_match.group(1).strip()
+        else:
+            result['prompt'] = "# Auto-generated - no custom prompts needed\n"
+
+        return result
+
+    def _validate_python_syntax(self, code: str) -> bool:
+        """
+        验证Python代码语法
+
+        Args:
+            code: Python代码字符串
+
+        Returns:
+            bool: 语法是否正确
+        """
+        try:
+            compile(code, '<string>', 'exec')
+            return True
+        except SyntaxError as e:
+            logger.error(f"[RLEnhancedOptimizer] Syntax error in code: {e}")
+            logger.error(f"[RLEnhancedOptimizer] Error line: {e.lineno}, offset: {e.offset}")
+            logger.error(f"[RLEnhancedOptimizer] Error text: {e.text}")
+            return False
+        except Exception as e:
+            logger.error(f"[RLEnhancedOptimizer] Unexpected error during syntax check: {e}")
+            return False
+
+    async def _generate_code_with_qwen(
+        self,
+        experience: str,
+        sample: Dict,
+        graph: str,
+        prompt: str,
+        operator_description: str,
+        log_data: str,
+        max_retries: int = 2
+    ) -> Optional[Dict[str, str]]:
+        """
+        使用Qwen直接生成完整workflow代码 (MCTS + Qwen的核心方法)
+
+        完全对齐原版AFlow设计：
+        1. Qwen生成完整Python代码（不是建议）
+        2. 代码包含在<graph>标签中
+        3. 验证语法
+        4. 返回与GPT-4相同格式的response
+
+        Args:
+            experience: 经验池字符串
+            sample: 选中的父节点数据
+            graph: 父workflow的graph代码
+            prompt: 父workflow的prompt代码
+            operator_description: 可用operators描述
+            log_data: 执行日志
+            max_retries: 最大重试次数（语法错误时）
+
+        Returns:
+            Dict[str, str]: {'modification': str, 'graph': str, 'prompt': str} 或 None
+        """
+        # 构建observation（类似deep_workflow_env的format_observation）
+        observation = self._build_observation_for_qwen(
+            experience, sample, graph, prompt, operator_description, log_data
+        )
+
+        logger.info(f"[RLEnhancedOptimizer] Generating code with Qwen (max_retries={max_retries})")
+        logger.info(f"[RLEnhancedOptimizer] Parent round: {sample['round']}, Parent score: {sample['score']:.4f}")
+
+        # 尝试生成代码（带重试机制）
+        for attempt in range(max_retries):
+            try:
+                # 调用Qwen生成代码
+                qwen_output = await self._call_qwen_generator(observation)
+
+                if not qwen_output:
+                    logger.warning(f"[RLEnhancedOptimizer] Attempt {attempt+1}/{max_retries}: Empty output from Qwen")
+                    continue
+
+                logger.info(f"[RLEnhancedOptimizer] Attempt {attempt+1}/{max_retries}: Received {len(qwen_output)} chars from Qwen")
+
+                # 提取代码
+                extraction_result = self._extract_code_from_qwen(qwen_output)
+
+                if extraction_result is None:
+                    logger.warning(f"[RLEnhancedOptimizer] Attempt {attempt+1}/{max_retries}: Failed to extract <graph> tag")
+                    continue
+
+                graph_code = extraction_result['graph']
+                modification = extraction_result['modification']
+                prompt_code = extraction_result['prompt']
+
+                logger.info(f"[RLEnhancedOptimizer] Extracted code: {len(graph_code)} chars")
+                logger.info(f"[RLEnhancedOptimizer] Modification: {modification[:100]}...")
+
+                # 验证语法
+                if not self._validate_python_syntax(graph_code):
+                    logger.warning(f"[RLEnhancedOptimizer] Attempt {attempt+1}/{max_retries}: Syntax validation failed")
+                    continue
+
+                # 成功！返回response
+                logger.info(f"[RLEnhancedOptimizer] ✅ Qwen generated valid code on attempt {attempt+1}")
+
+                return {
+                    'modification': modification,
+                    'graph': graph_code,
+                    'prompt': prompt_code
+                }
+
+            except Exception as e:
+                logger.error(f"[RLEnhancedOptimizer] Attempt {attempt+1}/{max_retries}: Error: {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"[RLEnhancedOptimizer] Retrying...")
+                continue
+
+        # 所有尝试都失败
+        logger.error(f"[RLEnhancedOptimizer] ❌ Failed to generate valid code after {max_retries} attempts")
+        return None
+
+    def _build_observation_for_qwen(
+        self,
+        experience: str,
+        sample: Dict,
+        graph: str,
+        prompt: str,
+        operator_description: str,
+        log_data: str
+    ) -> str:
+        """
+        为Qwen构建observation
+
+        类似于workflow_code_prompt_manager的format_observation，
+        但基于MCTS的上下文（父节点、经验池等）
+
+        Args:
+            experience: 经验池字符串
+            sample: 父节点数据
+            graph: 父graph代码
+            prompt: 父prompt代码
+            operator_description: 可用operators
+            log_data: 执行日志
+
+        Returns:
+            str: 格式化的observation
+        """
+        parent_round = sample['round']
+        parent_score = sample['score']
+
+        obs = f"""## Workflow Optimization Task - Dynamic Mode with MCTS
+
+Dataset: {self.dataset}
+Current Round: {self.round + 1}
+Parent Round: {parent_round}
+Parent Score: {parent_score:.4f}
+
+## Your Task:
+Design a NEW workflow that improves upon the parent workflow.
+Your workflow will be executed on real test cases and scored.
+
+## Parent Workflow (Round {parent_round}):
+
+### Parent Graph Code:
+```python
+{graph[:500]}...
+```
+
+### Parent Prompt Code:
+```python
+{prompt[:200]}...
+```
+
+## Available Operators:
+{operator_description}
+
+## Experience from Previous Attempts:
+{experience[:1000]}...
+
+## Execution Logs (if available):
+{log_data[:500] if log_data else 'No logs available'}
+
+## Instructions:
+1. Analyze the parent workflow and identify areas for improvement
+2. Generate a COMPLETE Python workflow using available operators
+3. Output your code in the required XML format:
+
+<modification>
+Brief description of your changes and why they should improve performance.
+Example: "Increase ensemble size from 5 to 15 samples to improve accuracy on hard problems"
+</modification>
+
+<graph>
+class Workflow:
+    def __init__(self, name: str, llm_config, dataset: str) -> None:
+        self.name = name
+        self.dataset = dataset
+        self.llm = create_llm_instance(llm_config)
+
+        # Initialize operators you need
+        self.custom = operator.Custom(self.llm)
+        self.sc_ensemble = operator.ScEnsemble(self.llm)
+        # Add more as needed
+
+    async def __call__(self, problem: str, entry_point: Optional[str] = None):
+        # YOUR COMPLETE WORKFLOW LOGIC HERE
+        # This code will be executed directly!
+
+        # MUST return (solution, cost) tuple
+        return solution, 0.0
+</graph>
+
+<prompt>
+# Custom prompts if needed (optional)
+</prompt>
+
+## Critical Requirements:
+- Code MUST be syntactically correct Python
+- MUST return (solution, cost) tuple from __call__
+- MUST use async/await for operator calls
+- Focus on improving the parent workflow's weaknesses
+- Balance effectiveness vs computational cost
+
+GO:
+"""
+        return obs
+
+    async def _call_qwen_generator(self, observation: str) -> str:
+        """
+        调用Qwen generator生成代码
+
+        支持多种接口：
+        1. get_action_and_value(obs, max_new_tokens, temperature) - VERL style
+        2. generate(prompt) - simple style
+        3. __call__(prompt) - callable style
+
+        Args:
+            observation: 输入observation
+
+        Returns:
+            str: Qwen生成的输出
+        """
+        # 尝试VERL-style接口 (TrainableQwenPolicy)
+        if hasattr(self.qwen_code_generator, 'get_action_and_value'):
+            try:
+                action, _, _, _ = self.qwen_code_generator.get_action_and_value(
+                    obs=observation,
+                    max_new_tokens=800,  # 足够生成完整代码
+                    temperature=0.7
+                )
+                return action
+            except Exception as e:
+                logger.warning(f"[RLEnhancedOptimizer] Error calling get_action_and_value: {e}")
+
+        # 尝试generate方法
+        if hasattr(self.qwen_code_generator, 'generate'):
+            try:
+                result = self.qwen_code_generator.generate(observation)
+                if asyncio.iscoroutine(result):
+                    result = await result
+                return str(result)
+            except Exception as e:
+                logger.warning(f"[RLEnhancedOptimizer] Error calling generate: {e}")
+
+        # 尝试callable接口
+        if callable(self.qwen_code_generator):
+            try:
+                result = self.qwen_code_generator(observation)
+                if asyncio.iscoroutine(result):
+                    result = await result
+                return str(result)
+            except Exception as e:
+                logger.warning(f"[RLEnhancedOptimizer] Error calling generator: {e}")
+
+        # 无法调用
+        raise ValueError(
+            "qwen_code_generator does not have a supported interface. "
+            "Expected: get_action_and_value(), generate(), or __call__()"
+        )

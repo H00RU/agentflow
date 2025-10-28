@@ -217,7 +217,7 @@ class TrainableQwenPolicy(nn.Module):
         obs: str,
         max_new_tokens: int = 200,
         temperature: float = 0.7
-    ) -> Tuple[str, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[str, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Generate action and compute log_prob + value for training
         生成动作并计算 log_prob 和 value 用于训练
@@ -228,7 +228,7 @@ class TrainableQwenPolicy(nn.Module):
             temperature: Sampling temperature
 
         Returns:
-            Tuple: (action_text, log_probs, values)
+            Tuple: (action_text, log_probs, values, response_mask)
         """
         # Tokenize observation
         inputs = self.tokenizer(

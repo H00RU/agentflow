@@ -29,7 +29,7 @@ try:
     from trainable_qwen_policy import TrainableQwenPolicy
     from rl_trainer import RLTrainer
     from deep_workflow_env import create_deep_workflow_env
-    from workflow_prompt_manager import get_prompt_manager
+    from workflow_code_prompt_manager import get_code_prompt_manager  # Qwen直接生成代码
 
     IMPORTS_AVAILABLE = True
 except ImportError as e:
@@ -106,10 +106,12 @@ class RealWorkflowTrainer:
             raise ValueError("Please specify 'train_datasets' in config file under 'environment' section")
 
         # Get prompt manager (根据第一个训练数据集创建)
-        # 如果有多个数据集，使用第一个数据集的prompt manager
+        # 使用新的 code prompt manager - Qwen直接生成代码（无Parser）
         primary_dataset = self.train_datasets[0] if self.train_datasets else "HumanEval"
-        self.prompt_manager = get_prompt_manager(dataset=primary_dataset)
-        print(f"Using prompt manager for dataset: {primary_dataset}")
+        self.prompt_manager = get_code_prompt_manager(dataset=primary_dataset)
+        print(f"✅ Using CODE prompt manager for dataset: {primary_dataset}")
+        print(f"✅ Qwen will generate complete Python code (no Parser)")
+        print(f"✅ Fully aligned with original AFlow design")
 
         # RL configuration
         self.rl_config = config.get('rl', {})
@@ -209,11 +211,10 @@ class RealWorkflowTrainer:
         logger.info("[Trainer] 🧪 Evaluating trained policy on TEST set...")
         logger.info("[Trainer] Policy will generate a NEW workflow for test evaluation")
 
-        from workflow_parser import WorkflowParser
         import importlib.util
         import asyncio
+        import os
 
-        parser = WorkflowParser()
         test_dataset = self.train_datasets[0] if self.train_datasets else "AIME"
 
         # 计算测试集大小（通用方式：使用配置的train_test_split）
@@ -231,36 +232,43 @@ class RealWorkflowTrainer:
             test_obs = self._construct_test_observation(env, test_dataset)
             logger.info(f"[Trainer] Test observation constructed (length: {len(test_obs)} chars)")
 
-            # 步骤2: 使用训练好的policy生成workflow描述
-            logger.info("[Trainer] Generating workflow using trained policy...")
-            workflow_desc, _, _, _ = self.policy.get_action_and_value(
+            # 步骤2: 使用训练好的policy生成workflow代码（无Parser）
+            logger.info("[Trainer] Generating workflow CODE using trained policy...")
+            workflow_output, _, _, _ = self.policy.get_action_and_value(
                 obs=test_obs,
-                max_new_tokens=300,
-                temperature=0.7  # 保持一定随机性
+                max_new_tokens=800,  # 增加token数以容纳完整代码
+                temperature=0.7
             )
-            logger.info(f"[Trainer] Policy generated workflow description:")
-            logger.info(f"[Trainer] {workflow_desc[:200]}...")  # 打印前200字符
+            logger.info(f"[Trainer] Policy generated workflow:")
+            logger.info(f"[Trainer] {workflow_output[:300]}...")  # 打印前300字符
 
-            # 步骤3: 解析workflow描述
-            logger.info("[Trainer] Parsing workflow description...")
-            workflow_spec = parser.parse_qwen_output(
-                workflow_desc,
-                dataset_type=test_dataset,
-                sample_count=self.env_config.get('workflow_sample_count')
-            )
+            # 步骤3: 提取代码（无Parser）
+            logger.info("[Trainer] Extracting code from policy output...")
+            extraction_result = env._extract_code_from_qwen(workflow_output)
 
-            if workflow_spec is None:
-                logger.warning("[Trainer] Failed to parse policy output, falling back to best_workflow")
+            if extraction_result is None:
+                logger.warning("[Trainer] Failed to extract code from policy output, falling back to best_workflow")
                 return self._evaluate_fallback_workflow(env, num_test_problems)
 
-            logger.info(f"[Trainer] ✓ Parsed workflow: {len(workflow_spec.operators)} operators, {len(workflow_spec.steps)} steps")
-            logger.info(f"[Trainer]   Operators: {workflow_spec.operators}")
+            graph_code = extraction_result['graph']
+            modification = extraction_result['modification']
+            prompt_code = extraction_result.get('prompt', '')
 
-            # 步骤4: 保存workflow到文件
-            test_workflow_path = parser.save_workflow_to_file(
-                workflow_spec,
-                "policy_test_eval",
-                str(self.workflow_dir / "test_evaluation")
+            logger.info(f"[Trainer] ✓ Extracted workflow code")
+            logger.info(f"[Trainer]   Modification: {modification}")
+            logger.info(f"[Trainer]   Code length: {len(graph_code)} chars")
+
+            # 步骤3.5: 验证语法
+            if not env._validate_python_syntax(graph_code):
+                logger.warning("[Trainer] Syntax error in generated code, falling back to best_workflow")
+                return self._evaluate_fallback_workflow(env, num_test_problems)
+
+            # 步骤4: 保存workflow到文件（使用AFlow方式）
+            test_workflow_path = env._save_workflow_code_aflow_style(
+                graph_code=graph_code,
+                prompt_code=prompt_code,
+                round_id="policy_test_eval",
+                modification=modification
             )
             logger.info(f"[Trainer] ✓ Workflow saved to {test_workflow_path}")
 
@@ -338,7 +346,39 @@ Training Summary:
 Your task: Generate a high-quality workflow that generalizes well to unseen test problems.
 Focus on designing a robust workflow that can handle the complexity of {dataset} problems.
 
-IMPORTANT: Output your workflow in the required XML format with <workflow_modification>, <operators>, and <workflow_steps>.
+## Output Format:
+Generate a COMPLETE Python workflow using the XML format below:
+
+<modification>
+Brief description of your workflow design and why it should work well on test problems.
+Example: "Use ensemble of 15 samples with custom reasoning and review steps"
+</modification>
+
+<graph>
+class Workflow:
+    def __init__(self, name: str, llm_config, dataset: str) -> None:
+        from scripts.async_llm import create_llm_instance
+        self.name = name
+        self.dataset = dataset
+        self.llm = create_llm_instance(llm_config)
+
+        # Initialize operators
+        from scripts import operator
+        self.custom = operator.Custom(self.llm)
+        self.sc_ensemble = operator.ScEnsemble(self.llm)
+        # Add more operators as needed
+
+    async def __call__(self, problem: str, entry_point=None):
+        # YOUR COMPLETE WORKFLOW LOGIC HERE
+        # MUST return (solution, cost) tuple
+        return solution, 0.0
+</graph>
+
+<prompt>
+# Custom prompts if needed (optional)
+</prompt>
+
+CRITICAL: Code must be syntactically correct Python and return (solution, cost) tuple.
 """
 
         return obs
@@ -362,18 +402,18 @@ IMPORTANT: Output your workflow in the required XML format with <workflow_modifi
             logger.warning("[Trainer] No best workflow found, returning 0.0")
             return 0.0
 
-        from workflow_parser import WorkflowParser
         import importlib.util
         import asyncio
 
-        parser = WorkflowParser()
         test_dataset = self.train_datasets[0] if self.train_datasets else "AIME"
 
-        # 保存临时workflow
-        test_workflow_path = parser.save_workflow_to_file(
-            env.best_workflow,
-            "fallback_test_eval",
-            str(self.workflow_dir / "temp")
+        # best_workflow现在是字典：{'graph': code, 'modification': str, ...}
+        # 保存临时workflow（使用AFlow方式）
+        test_workflow_path = env._save_workflow_code_aflow_style(
+            graph_code=env.best_workflow['graph'],
+            prompt_code=env.best_workflow.get('prompt', ''),
+            round_id="fallback_test_eval",
+            modification=env.best_workflow.get('modification', 'Best workflow from training')
         )
 
         # 导入并测试
@@ -421,6 +461,15 @@ IMPORTANT: Output your workflow in the required XML format with <workflow_modifi
         workflow_sample_count = self.env_config.get('workflow_sample_count')
         train_test_split = self.env_config.get('train_test_split', 0.8)
 
+        # Dynamic Mode 和 MCTS+Qwen 配置
+        use_dynamic_optimizer = self.env_config.get('use_dynamic_optimizer', False)
+        validation_rounds = self.env_config.get('validation_rounds', 3)
+        rl_weight = self.env_config.get('rl_weight', 0.5)
+
+        # MCTS + Qwen直接生成配置
+        use_qwen_code_generation = self.env_config.get('use_qwen_code_generation', False)
+        qwen_max_retries = self.env_config.get('qwen_max_retries', 2)
+
         # Create training environments
         for dataset in self.train_datasets:
             logger.info(f"Creating REAL workflow environment for {dataset}")
@@ -436,13 +485,34 @@ IMPORTANT: Output your workflow in the required XML format with <workflow_modifi
                 max_rounds=max_rounds,
                 workspace_path=str(self.workflow_dir / dataset),
                 workflow_sample_count=workflow_sample_count,
-                train_test_split=train_test_split
+                train_test_split=train_test_split,
+                # Dynamic Mode参数
+                use_dynamic_optimizer=use_dynamic_optimizer,
+                validation_rounds=validation_rounds,
+                rl_weight=rl_weight,
+                # MCTS + Qwen参数
+                use_qwen_code_generation=use_qwen_code_generation,
+                qwen_code_generator=self.policy,  # 使用训练的Qwen policy
+                qwen_max_retries=qwen_max_retries
             )
 
             logger.info(f"✅ REAL Workflow Environment created")
             logger.info(f"   Dataset: {dataset}")
-            logger.info(f"   Workflow generation: Qwen → Parser → Python code")
-            logger.info(f"   Evaluation: Real HumanEval execution")
+
+            # 根据模式显示不同的信息
+            if use_dynamic_optimizer:
+                if use_qwen_code_generation:
+                    logger.info(f"   Mode: MCTS + Qwen Direct Generation")
+                    logger.info(f"   Workflow: MCTS → Qwen → Python code (no GPT-4)")
+                else:
+                    logger.info(f"   Mode: MCTS + GPT-4 Generation (原版AFlow)")
+                    logger.info(f"   Workflow: MCTS → GPT-4 → Python code")
+                logger.info(f"   RL weight: {rl_weight}")
+            else:
+                logger.info(f"   Mode: Static - Qwen Direct Code Generation")
+                logger.info(f"   Workflow: Qwen → Python code → Execute")
+
+            logger.info(f"   Evaluation: Real {dataset} execution")
             logger.info(f"   Reward: Real pass@k scores")
 
             self.train_envs[dataset] = env

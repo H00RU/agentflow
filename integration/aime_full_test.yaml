@@ -52,6 +52,16 @@ environment:
   use_dynamic_optimizer: true  # 启用动态优化（MCTS + RL）
   rl_weight: 0.5  # RL权重，平衡MCTS UCB和RL Q-value
 
+  # MCTS + Qwen直接生成配置（已启用）
+  use_qwen_code_generation: true  # ✅ 启用：让Qwen直接生成代码（无GPT-4 fallback）
+  qwen_max_retries: 2  # Qwen语法错误时的最大重试次数
+  #
+  # MCTS + Qwen直接生成 = Dynamic Mode (MCTS) + Qwen代码生成
+  # - 保留完整MCTS树搜索
+  # - 用Qwen完全自主生成代码（失败时通过负奖励学习）
+  # - 无GPT-4干预，坚持项目初心
+  # - 降低成本，完全对齐原版AFlow架构
+
   # 新增：workflow内部采样数配置
   # 这控制ScEnsemble生成多少个候选方案
   workflow_sample_count: 15  # 使用15次采样（平衡速度和质量）
