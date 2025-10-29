@@ -69,7 +69,8 @@ class DeepWorkflowEnv:
         train_test_split: float = 0.8,
         use_qwen_code_generation: bool = False,
         qwen_code_generator=None,
-        qwen_max_retries: int = 2
+        qwen_max_retries: int = 2,
+        mini_batch_size: int = None
     ):
         """
         初始化真实workflow环境
@@ -106,7 +107,7 @@ class DeepWorkflowEnv:
         self.rl_weight = rl_weight
 
         # Mini-batch configuration
-        self.mini_batch_size = env_config.get('mini_batch_size', None)  # None = use all samples
+        self.mini_batch_size = mini_batch_size  # None = use all samples
 
         # MCTS + Qwen直接生成相关参数
         self.use_qwen_code_generation = use_qwen_code_generation
@@ -880,7 +881,9 @@ def create_deep_workflow_env(dataset, opt_llm_config, exec_llm_config, **kwargs)
         # MCTS + Qwen参数
         use_qwen_code_generation=kwargs.get('use_qwen_code_generation', False),
         qwen_code_generator=kwargs.get('qwen_code_generator'),
-        qwen_max_retries=kwargs.get('qwen_max_retries', 2)
+        qwen_max_retries=kwargs.get('qwen_max_retries', 2),
+        # Mini-batch参数
+        mini_batch_size=kwargs.get('mini_batch_size', None)
     )
 
 
