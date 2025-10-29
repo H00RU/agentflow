@@ -477,7 +477,7 @@ CRITICAL: Code must be syntactically correct Python and return (solution, cost) 
                 env_num=env_num,
                 sample=sample,
                 max_rounds=max_rounds,
-                workspace_path=str(self.workflow_dir / dataset),
+                workspace_path=str(self.workflow_dir),  # 不包含dataset，optimizer会自己添加
                 workflow_sample_count=workflow_sample_count,
                 train_test_split=train_test_split,
                 # Dynamic Mode参数

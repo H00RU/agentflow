@@ -841,8 +841,7 @@ Your task: Generate a workflow description that will be converted to executable 
 
         for item in recent:
             summary += f"  Round {item['round']} Env{item['env_id']}: "
-            summary += f"Score={item['score']:.4f}, "
-            summary += f"Operators={item['workflow_spec'].operators}\n"
+            summary += f"Score={item['score']:.4f}\n"
 
         return summary
 
