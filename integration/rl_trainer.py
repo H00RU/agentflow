@@ -41,6 +41,8 @@ class RolloutBuffer:
         self.rewards = []
         self.dones = []
         self.response_masks = []
+        self.input_ids = []  # Store complete input_ids (prompt + response) for consistent re-computation
+        self.attention_masks = []  # Store attention masks
 
         # Workflow-specific information
         self.workflow_nodes = []
@@ -56,6 +58,8 @@ class RolloutBuffer:
         reward: float,
         done: bool,
         response_mask: torch.Tensor,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
         workflow_node: Optional[str] = None,
         workflow_state: Optional[Any] = None,
         episode_idx: int = 0,
@@ -68,6 +72,11 @@ class RolloutBuffer:
         self.rewards.append(reward)
         self.dones.append(done)
         self.response_masks.append(response_mask.detach().cpu())
+        # Store complete sequences for consistent re-computation during updates
+        if input_ids is not None:
+            self.input_ids.append(input_ids.detach().cpu())
+        if attention_mask is not None:
+            self.attention_masks.append(attention_mask.detach().cpu())
 
         self.workflow_nodes.append(workflow_node)
         self.workflow_states.append(workflow_state)
@@ -113,6 +122,32 @@ class RolloutBuffer:
                 response_masks_list.append(rm_padded)
             response_masks_padded = torch.stack(response_masks_list)
 
+        # Pad input_ids and attention_masks if available
+        input_ids_padded = None
+        attention_masks_padded = None
+        if self.input_ids:
+            max_len = max(ids.shape[1] for ids in self.input_ids)
+            input_ids_list = []
+            attention_masks_list = []
+            for ids, mask in zip(self.input_ids, self.attention_masks):
+                # Squeeze out batch dimension if present (1, seq_len) -> (seq_len,)
+                if ids.dim() == 2 and ids.shape[0] == 1:
+                    ids = ids.squeeze(0)
+                    mask = mask.squeeze(0)
+
+                if ids.shape[0] < max_len:
+                    # Pad to max length
+                    padding = torch.zeros(max_len - ids.shape[0], dtype=ids.dtype)
+                    ids_padded = torch.cat([ids, padding], dim=0)
+                    mask_padded = torch.cat([mask, torch.zeros(max_len - mask.shape[0], dtype=mask.dtype)], dim=0)
+                else:
+                    ids_padded = ids
+                    mask_padded = mask
+                input_ids_list.append(ids_padded)
+                attention_masks_list.append(mask_padded)
+            input_ids_padded = torch.stack(input_ids_list)  # Now (bs, seq_len)
+            attention_masks_padded = torch.stack(attention_masks_list)  # Now (bs, seq_len)
+
         return {
             'observations': self.observations,
             'actions': self.actions,
@@ -120,6 +155,8 @@ class RolloutBuffer:
             'rewards': torch.tensor(self.rewards, dtype=torch.float32),
             'dones': torch.tensor(self.dones, dtype=torch.bool),
             'response_masks': response_masks_padded,
+            'input_ids': input_ids_padded,  # Complete sequences for re-computation
+            'attention_masks': attention_masks_padded,
             'workflow_nodes': np.array(self.workflow_nodes) if self.workflow_nodes else None,
             'workflow_states': self.workflow_states,
             'episode_indices': np.array(self.episode_indices),
@@ -237,18 +274,24 @@ class RLTrainer:
                 actions = []
                 log_probs_list = []
                 response_masks_list = []
+                input_ids_list = []
+                attention_masks_list = []
 
                 for i, (obs, done) in enumerate(zip(obs_list, done_list)):
                     if not done:
-                        action, log_probs, response_mask = self.policy.get_action_and_value(obs)
+                        action, log_probs, response_mask, input_ids, attention_mask = self.policy.get_action_and_value(obs)
 
                         actions.append(action)
                         log_probs_list.append(log_probs)
                         response_masks_list.append(response_mask)
+                        input_ids_list.append(input_ids)
+                        attention_masks_list.append(attention_mask)
                     else:
                         actions.append("")
                         log_probs_list.append(None)
                         response_masks_list.append(None)
+                        input_ids_list.append(None)
+                        attention_masks_list.append(None)
 
                 # Step environment
                 next_obs_list, reward_list, done_list, info_list = env.step(actions)
@@ -263,6 +306,8 @@ class RLTrainer:
                             reward=reward_list[i],
                             done=done_list[i],
                             response_mask=response_masks_list[i],
+                            input_ids=input_ids_list[i],
+                            attention_mask=attention_masks_list[i],
                             workflow_node=info_list[i].get('mcts_node_id'),
                             workflow_state=info_list[i].get('state_id'),
                             episode_idx=episode * len(obs_list) + i,
@@ -316,6 +361,11 @@ class RLTrainer:
             Tuple: (advantages, returns)
         """
         print(f"DEBUG compute_advantages_grpo: rewards shape = {rewards.shape}, response_masks shape = {response_masks.shape}")
+
+        # Fix: Handle 3D response_masks (bs, 1, seq_len) -> squeeze to (bs, seq_len)
+        if len(response_masks.shape) == 3 and response_masks.shape[1] == 1:
+            response_masks = response_masks.squeeze(1)
+            print(f"DEBUG: Squeezed response_masks to shape {response_masks.shape}")
 
         # Handle reward shape
         if len(rewards.shape) == 1:
@@ -442,36 +492,29 @@ class RLTrainer:
             'clip_fraction': 0.0
         }
 
-        # Get observations for re-computing log_probs
-        observations = data['observations']
+        # Get stored input_ids and attention_masks for consistent re-computation
+        input_ids = data['input_ids']  # Already padded and batched
+        attention_masks = data['attention_masks']  # Already padded and batched
 
         for epoch in range(self.ppo_epochs):
             # ==================================================
             # GRPO PPO UPDATE (No value loss)
             # ==================================================
 
-            # 1. Re-compute log_probs with gradients
-            # Tokenize all observations
-            inputs_list = []
-            for obs in observations:
-                inputs = self.policy.tokenizer(
-                    obs,
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                    max_length=1024
-                ).to(self.device)
-                inputs_list.append(inputs)
+            # 1. Re-compute log_probs with gradients using stored input_ids
+            # This ensures consistent sequence lengths with stored response_masks
+            input_ids_device = input_ids.to(self.device)
+            attention_masks_device = attention_masks.to(self.device)
 
             # Batch forward pass (GRPO: no values)
             new_log_probs_list = []
             entropies_list = []
 
-            for i, inputs in enumerate(inputs_list):
-                # Forward pass with gradients
+            for i in range(input_ids_device.shape[0]):
+                # Forward pass with gradients using stored input_ids
                 outputs = self.policy.forward(
-                    input_ids=inputs['input_ids'],
-                    attention_mask=inputs['attention_mask'],
+                    input_ids=input_ids_device[i:i+1],
+                    attention_mask=attention_masks_device[i:i+1],
                     response_mask=response_masks[i:i+1]
                 )
 

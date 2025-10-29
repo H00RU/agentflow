@@ -228,7 +228,7 @@ class RealWorkflowTrainer:
 
             # 步骤2: 使用训练好的policy生成workflow代码（无Parser）
             logger.info("[Trainer] Generating workflow CODE using trained policy...")
-            workflow_output, _, _, _ = self.policy.get_action_and_value(
+            workflow_output, _, _, _, _ = self.policy.get_action_and_value(
                 obs=test_obs,
                 max_new_tokens=800,  # 增加token数以容纳完整代码
                 temperature=0.7

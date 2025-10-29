@@ -142,19 +142,15 @@ class DeepWorkflowEnv:
             logger.info(f"[DeepWorkflowEnv] 📋 STATIC MODE: Qwen → Python Code → Execute")
             logger.info(f"[DeepWorkflowEnv] ✅ Aligned with original AFlow design (no Parser)")
 
-        # 创建evaluator（用于真实测试，根据dataset类型动态选择）
-        # 优先尝试使用特定数据集的evaluator，否则使用通用evaluator
-        if self._has_custom_evaluator(self.dataset):
-            self.evaluator = self._create_custom_evaluator(self.dataset, self.exec_llm_config)
-            logger.info(f"[DeepWorkflowEnv] Using custom evaluator for {self.dataset}")
-        else:
-            self.evaluator = WorkflowEvaluator(
-                dataset=self.dataset,
-                sample_size=sample,
-                timeout_per_problem=30,
-                train_test_split=self.train_test_split
-            )
-            logger.info(f"[DeepWorkflowEnv] Using WorkflowEvaluator for {self.dataset}")
+        # 创建evaluator（用于真实测试）
+        # 所有数据集统一使用WorkflowEvaluator，AIME已加入AFlow标准支持
+        self.evaluator = WorkflowEvaluator(
+            dataset=self.dataset,
+            sample_size=sample,
+            timeout_per_problem=30,
+            train_test_split=self.train_test_split
+        )
+        logger.info(f"[DeepWorkflowEnv] Using WorkflowEvaluator for {self.dataset}")
 
         # 当前状态
         self.current_round = 0
@@ -224,44 +220,6 @@ class DeepWorkflowEnv:
             return "math"
         else:
             return "qa"
-
-    def _has_custom_evaluator(self, dataset: str) -> bool:
-        """
-        检查数据集是否有自定义evaluator
-
-        Args:
-            dataset: 数据集名称
-
-        Returns:
-            是否有自定义evaluator
-        """
-        dataset_upper = dataset.upper()
-        # 目前只有AIME有自定义evaluator
-        return dataset_upper == "AIME"
-
-    def _create_custom_evaluator(self, dataset: str, llm_config: Dict):
-        """
-        创建数据集特定的自定义evaluator
-
-        Args:
-            dataset: 数据集名称
-            llm_config: LLM配置
-
-        Returns:
-            自定义evaluator实例
-        """
-        dataset_upper = dataset.upper()
-
-        if dataset_upper == "AIME":
-            from aime_evaluator import AIMEEvaluator
-            return AIMEEvaluator(
-                llm_config=llm_config,
-                dataset_path="/content/agentflow/AFlow/data/AIME_2024.jsonl",
-                sample_size=self.sample,  # 传递配置的 sample 参数
-                train_test_split=self.train_test_split  # 传递配置的 train_test_split 参数
-            )
-        else:
-            raise ValueError(f"No custom evaluator for dataset: {dataset}")
 
     def reset(self) -> Tuple[List[str], List[Dict]]:
         """
@@ -665,8 +623,9 @@ class DeepWorkflowEnv:
         """
         from scripts.prompts.optimize_prompt import WORKFLOW_TEMPLATE
 
-        # 创建round目录
-        round_dir = os.path.join(self.workspace_path, f"round_{round_id}")
+        # 创建round目录 - 统一使用workflows子目录以匹配optimizer查找路径
+        workflows_base = os.path.join(self.workspace_path, "workflows")
+        round_dir = os.path.join(workflows_base, f"round_{round_id}")
         os.makedirs(round_dir, exist_ok=True)
 
         # 1. 使用WORKFLOW_TEMPLATE生成完整代码（与原版AFlow相同）
@@ -751,13 +710,6 @@ class DeepWorkflowEnv:
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-
-            # 如果是AIMEEvaluator，需要先初始化
-            if hasattr(self.evaluator, 'initialize') and self._has_custom_evaluator(self.dataset):
-                if not self.evaluator.problems:  # 只在第一次初始化
-                    logger.info(f"[DeepWorkflowEnv] Initializing AIMEEvaluator...")
-                    loop.run_until_complete(self.evaluator.initialize())
-                    logger.info(f"[DeepWorkflowEnv] AIMEEvaluator initialized with {len(self.evaluator.problems)} problems")
 
             # 执行评估（支持mini-batch和随机采样）
             result = loop.run_until_complete(

@@ -124,6 +124,74 @@ class RLEnhancedOptimizer(Optimizer):
             "avg_combined_score": 0.0
         }
 
+    def _generate_baseline_workflow(self, directory: str, round_number: int):
+        """
+        Generate baseline workflow for MCTS initialization
+        自动生成MCTS的baseline workflow（第一轮）
+
+        Args:
+            directory: Round directory path
+            round_number: Round number (should be 1)
+        """
+        import os
+
+        logger.info(f"[MCTS] Creating baseline workflow for round {round_number}...")
+
+        # Create baseline graph using Custom operator only
+        baseline_response = {
+            "graph": """class Workflow:
+    def __init__(self, name: str, llm_config, dataset: str) -> None:
+        '''Baseline workflow - MCTS starting point'''
+        self.name = name
+        self.dataset = dataset
+        from scripts.async_llm import create_llm_instance
+        from scripts.operators import Custom
+        self.llm = create_llm_instance(llm_config)
+        self.custom = Custom(self.llm)
+
+    async def __call__(self, problem: str):
+        '''Simple baseline: direct LLM solution with Custom operator'''
+        solution = await self.custom(
+            input=problem,
+            instruction="Solve this problem step by step. Provide your final answer clearly."
+        )
+        # Extract text from dict response and return with cost 0
+        response_text = solution.get("response", str(solution)) if isinstance(solution, dict) else str(solution)
+        return response_text, 0.0""",
+
+            "prompt": """# Baseline prompts for initial workflow
+
+SOLVE_PROMPT = \"\"\"Solve this problem step by step. Provide your final answer clearly.\"\"\"
+""",
+
+            "modification": "Initial baseline workflow using Custom operator"
+        }
+
+        # Write baseline graph and prompt files directly (bypass WORKFLOW_TEMPLATE)
+        graph_code = baseline_response["graph"]
+        prompt_code = baseline_response["prompt"]
+
+        # Write graph.py
+        graph_file = os.path.join(directory, "graph.py")
+        with open(graph_file, "w", encoding="utf-8") as f:
+            f.write("from typing import Literal\n")
+            f.write("from scripts.async_llm import create_llm_instance\n")
+            f.write("from scripts.evaluator import DatasetType\n\n")
+            f.write(graph_code)
+
+        # Write prompt.py
+        prompt_file = os.path.join(directory, "prompt.py")
+        with open(prompt_file, "w", encoding="utf-8") as f:
+            f.write(prompt_code)
+
+        # Write __init__.py
+        init_file = os.path.join(directory, "__init__.py")
+        with open(init_file, "w", encoding="utf-8") as f:
+            f.write("# Auto-generated baseline workflow\n")
+
+        logger.info(f"[MCTS] ✅ Baseline workflow created at {directory}")
+        logger.info(f"[MCTS] MCTS tree search will optimize from this baseline")
+
     async def _optimize_graph(self):
         """
         Override base method to incorporate RL guidance
@@ -134,8 +202,15 @@ class RLEnhancedOptimizer(Optimizer):
         data = self.data_utils.load_results(graph_path)
 
         if self.round == 1:
-            # Initial round - same as base class
+            # Initial round - create baseline workflow if not exists
             directory = self.graph_utils.create_round_directory(graph_path, self.round)
+
+            # Check if baseline workflow exists, if not, generate it
+            graph_file = os.path.join(graph_path, f"round_{self.round}", "graph.py")
+            if not os.path.exists(graph_file):
+                logger.info(f"[MCTS Init] Generating baseline workflow for round {self.round}...")
+                self._generate_baseline_workflow(directory, self.round)
+
             self.graph = self.graph_utils.load_graph(self.round, graph_path)
             avg_score = await self.evaluation_utils.evaluate_graph(
                 self, directory, validation_n, data, initial=True

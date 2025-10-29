@@ -204,7 +204,7 @@ class TrainableQwenPolicy(nn.Module):
         obs: str,
         max_new_tokens: int = 200,
         temperature: float = 0.7
-    ) -> Tuple[str, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[str, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Generate action and compute log_prob for GRPO training (no values)
         生成动作并计算 log_prob 用于 GRPO 训练（无需 values）
@@ -215,7 +215,7 @@ class TrainableQwenPolicy(nn.Module):
             temperature: Sampling temperature
 
         Returns:
-            Tuple: (action_text, log_probs, response_mask)
+            Tuple: (action_text, log_probs, response_mask, full_input_ids, full_attention_mask)
         """
         # Tokenize observation
         inputs = self.tokenizer(
@@ -280,7 +280,7 @@ class TrainableQwenPolicy(nn.Module):
 
         log_probs = outputs['log_probs']
 
-        return generated_text, log_probs, response_mask
+        return generated_text, log_probs, response_mask, full_ids, full_attention_mask
 
     def save_checkpoint(self, path: str):
         """Save model checkpoint (GRPO: no value head)"""
