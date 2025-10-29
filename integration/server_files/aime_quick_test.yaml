@@ -58,27 +58,15 @@ rl:
     use_lora: true
     lora_r: 16
     lora_alpha: 32
-    value_head_dim: 1024
 
-  # RL训练参数 - 针对AIME小数据集优化（24个训练样本）
+  # GRPO训练参数 - 针对AIME小数据集优化（24个训练样本）
   learning_rate: 0.00005  # 中等学习率（介于minimal和full之间）
   batch_size: 4  # 小batch，适合少样本
-  ppo_epochs: 3  # 快速测试用3epochs
+  ppo_epochs: 3  # PPO epochs用于GRPO的多轮优化
   ppo_clip: 0.2
-  gamma: 0.99
-  gae_lambda: 0.95
-  value_coef: 0.5
-  entropy_coef: 0.04  # 适度探索（介于minimal和full之间）
+  gamma: 0.99  # 保留用于兼容性（GRPO不使用discount）
+  entropy_coef: 0.1  # 提高探索性，防止operator使用退化
   gradient_clip: 1.0
-
-  gigpo:
-    enable: true
-    epsilon: 0.000001
-    step_advantage_w: 1.0  # 充分利用步骤级优势
-    mode: "mean_norm"
-    enable_similarity: true
-    similarity_thresh: 0.95  # 避免重复探索
-    workflow_similarity_thresh: 0.8  # 避免重复workflow
 
 logging:
   level: "INFO"

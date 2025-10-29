@@ -105,6 +105,9 @@ class DeepWorkflowEnv:
         self.validation_rounds = validation_rounds
         self.rl_weight = rl_weight
 
+        # Mini-batch configuration
+        self.mini_batch_size = env_config.get('mini_batch_size', None)  # None = use all samples
+
         # MCTS + Qwen直接生成相关参数
         self.use_qwen_code_generation = use_qwen_code_generation
         self.qwen_code_generator = qwen_code_generator
@@ -166,6 +169,10 @@ class DeepWorkflowEnv:
         logger.info(f"[DeepWorkflowEnv] Dataset: {dataset}")
         logger.info(f"[DeepWorkflowEnv] Workspace: {self.workspace_path}")
         logger.info(f"[DeepWorkflowEnv] Evaluator sample size: {sample}")
+        if self.mini_batch_size:
+            logger.info(f"[DeepWorkflowEnv] 🎲 Mini-Batch Mode: {self.mini_batch_size} problems/test (random sampling)")
+        else:
+            logger.info(f"[DeepWorkflowEnv] 📊 Full-Batch Mode: {sample} problems/test")
         logger.info(f"[DeepWorkflowEnv] ✅ REAL WORKFLOW EXECUTION ENABLED")
 
     def _init_dynamic_mode(self):
@@ -732,7 +739,14 @@ class DeepWorkflowEnv:
 
             # 使用evaluator执行测试
             # 这会真正运行测试任务并返回pass@k
-            logger.info(f"[DeepWorkflowEnv] Running real {self.dataset} test with sample={self.sample}...")
+            # Mini-batch模式：随机采样mini_batch_size个问题
+            num_problems = self.mini_batch_size if self.mini_batch_size else self.sample
+            use_random_sample = self.mini_batch_size is not None
+
+            if use_random_sample:
+                logger.info(f"[DeepWorkflowEnv] 🎲 Mini-Batch: Testing on {num_problems} random problems...")
+            else:
+                logger.info(f"[DeepWorkflowEnv] 📊 Full-Batch: Testing on {num_problems} problems...")
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -744,9 +758,13 @@ class DeepWorkflowEnv:
                     loop.run_until_complete(self.evaluator.initialize())
                     logger.info(f"[DeepWorkflowEnv] AIMEEvaluator initialized with {len(self.evaluator.problems)} problems")
 
-            # 执行评估
+            # 执行评估（支持mini-batch和随机采样）
             result = loop.run_until_complete(
-                self.evaluator.evaluate_workflow(workflow)
+                self.evaluator.evaluate_workflow(
+                    workflow,
+                    num_problems=num_problems,
+                    random_sample=use_random_sample
+                )
             )
 
             loop.close()

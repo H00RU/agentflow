@@ -64,26 +64,15 @@ rl:
     use_lora: true
     lora_r: 16
     lora_alpha: 32
-    value_head_dim: 1024
 
+  # GRPO训练参数
   learning_rate: 0.00003
   batch_size: 4
-  ppo_epochs: 4
+  ppo_epochs: 4  # PPO epochs用于GRPO的多轮优化
   ppo_clip: 0.2
-  gamma: 0.99
-  gae_lambda: 0.95
-  value_coef: 0.5
-  entropy_coef: 0.03
+  gamma: 0.99  # 保留用于兼容性（GRPO不使用discount）
+  entropy_coef: 0.1  # 提高探索性，防止operator使用退化
   gradient_clip: 1.0
-
-  gigpo:
-    enable: true
-    epsilon: 0.000001
-    step_advantage_w: 1.0
-    mode: "mean_norm"
-    enable_similarity: true
-    similarity_thresh: 0.95
-    workflow_similarity_thresh: 0.8
 
 logging:
   level: "INFO"

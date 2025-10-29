@@ -76,18 +76,19 @@ class TaskRunner:
                     raise NotImplementedError("PPO LoRA is not supported before vllm 0.7.3")
 
         # define worker classes
+        # NOTE: CriticWorker imports kept for backward compatibility but not used (GRPO uniform)
         if config.actor_rollout_ref.actor.strategy in ["fsdp", "fsdp2"]:
-            assert config.critic.strategy in ["fsdp", "fsdp2"]
+            # assert config.critic.strategy in ["fsdp", "fsdp2"]  # REMOVED: No critic needed for GRPO
             from verl.single_controller.ray import RayWorkerGroup
-            from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker, CriticWorker
+            from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker  # , CriticWorker (not used)
 
             actor_rollout_cls = AsyncActorRolloutRefWorker if config.actor_rollout_ref.rollout.mode == "async" else ActorRolloutRefWorker
             ray_worker_group_cls = RayWorkerGroup
 
         elif config.actor_rollout_ref.actor.strategy == "megatron":
-            assert config.actor_rollout_ref.actor.strategy == config.critic.strategy
+            # assert config.actor_rollout_ref.actor.strategy == config.critic.strategy  # REMOVED: No critic needed
             from verl.single_controller.ray.megatron import NVMegatronRayWorkerGroup
-            from verl.workers.megatron_workers import ActorRolloutRefWorker, CriticWorker
+            from verl.workers.megatron_workers import ActorRolloutRefWorker  # , CriticWorker (not used)
 
             actor_rollout_cls = ActorRolloutRefWorker
             ray_worker_group_cls = NVMegatronRayWorkerGroup
@@ -99,7 +100,7 @@ class TaskRunner:
 
         role_worker_mapping = {
             Role.ActorRollout: ray.remote(actor_rollout_cls),
-            Role.Critic: ray.remote(CriticWorker),
+            # Role.Critic: ray.remote(CriticWorker),  # REMOVED: No critic for GRPO uniform approach
         }
 
         global_pool_id = "global_pool"
@@ -108,7 +109,7 @@ class TaskRunner:
         }
         mapping = {
             Role.ActorRollout: global_pool_id,
-            Role.Critic: global_pool_id,
+            # Role.Critic: global_pool_id,  # REMOVED: No critic for GRPO uniform approach
         }
 
         # we should adopt a multi-source reward function here

@@ -127,8 +127,8 @@ actor_rollout_ref:
     enable_chunked_prefill: True # may get higher throughput when set to True. When activated, Please increase max_num_batched_tokens or decrease max_model_len.
     # for hf rollout
     do_sample: True
-    # number of responses (i.e. num sample times)
-    n: 1 # > 1 for grpo
+    # number of responses for GRPO group-relative advantage
+    n: 2 # GRPO requires n >= 2 for group comparison
     engine_kwargs: # inference engine parameters
       vllm:
         swap_space: null # null means "use the engine default value" (usually 4 GB), setting it to, e.g., 32 means 32 GB
@@ -229,9 +229,8 @@ custom_reward_function:
   name: compute_score
 
 algorithm:
-  gamma: 1.0
-  lam: 1.0
-  adv_estimator: gae
+  # Only GRPO is supported - simplest and most effective
+  adv_estimator: grpo
   norm_adv_by_std_in_grpo: True
   use_kl_in_reward: False
   kl_penalty: kl  # how to estimate kl divergence
@@ -240,18 +239,6 @@ algorithm:
     kl_coef: 0.001
     horizon: 10000
     target_kl: 0.1
-  use_pf_ppo: False
-  pf_ppo:
-    reweight_method: pow  # ["pow", "max_min", "max_random"]
-    weight_pow: 2.0
-  gigpo:
-    step_advantage_w: 1.0
-    mode: "mean_norm" # "mean_norm" or "mean_std_norm"
-    enable_similarity: False # whether to use similarity-based anchor state grouping in GiGPO (supported for text-only tasks)
-    similarity_thresh: 0.95 # similarity threshold for GiGPO (0.0, 1.0)
-  filter_groups: # DAPO from https://arxiv.org/abs/2503.14476
-    enable: False
-    max_num_gen_batches: 10
 
 trainer:
   balance_batch: True

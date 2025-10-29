@@ -139,7 +139,6 @@ class RealWorkflowTrainer:
             'best_score': 0.0,
             'avg_scores': [],
             'policy_losses': [],
-            'value_losses': [],
             'workflow_history': []
         }
 
@@ -161,8 +160,7 @@ class RealWorkflowTrainer:
             freeze_base=policy_config.get('freeze_base', False),
             use_lora=policy_config.get('use_lora', True),
             lora_r=policy_config.get('lora_r', 16),
-            lora_alpha=policy_config.get('lora_alpha', 32),
-            value_head_hidden_dim=policy_config.get('value_head_dim', 1024)
+            lora_alpha=policy_config.get('lora_alpha', 32)
         )
 
         # Set system prompt for workflow generation
@@ -180,16 +178,12 @@ class RealWorkflowTrainer:
         self.rl_trainer = RLTrainer(
             policy=self.policy,
             learning_rate=rl_config.get('learning_rate', 1e-5),
-            value_coef=rl_config.get('value_coef', 0.5),
             entropy_coef=rl_config.get('entropy_coef', 0.01),
             max_grad_norm=rl_config.get('gradient_clip', 1.0),
-            gamma=rl_config.get('gamma', 0.99),
-            gae_lambda=rl_config.get('gae_lambda', 0.95),
+            gamma=rl_config.get('gamma', 0.99),  # Kept for compatibility, not used in GRPO
             ppo_epochs=rl_config.get('ppo_epochs', 4),
             ppo_clip=rl_config.get('ppo_clip', 0.2),
             batch_size=rl_config.get('batch_size', 32),
-            use_gigpo=rl_config.get('gigpo', {}).get('enable', True),
-            gigpo_config={k: v for k, v in rl_config.get('gigpo', {}).items() if k != 'enable'},
             device=str(self.device)
         )
 
@@ -530,8 +524,7 @@ CRITICAL: Code must be syntactically correct Python and return (solution, cost) 
             'avg_score': 0.0,
             'avg_reward': 0.0,
             'num_updates': 0,
-            'policy_loss': 0.0,
-            'value_loss': 0.0
+            'policy_loss': 0.0
         }
 
         # Train on each dataset
@@ -565,7 +558,6 @@ CRITICAL: Code must be syntactically correct Python and return (solution, cost) 
 
                 if 'policy_loss' in update_stats:
                     epoch_stats['policy_loss'] += update_stats['policy_loss']
-                    epoch_stats['value_loss'] += update_stats['value_loss']
 
                 print(f"\nCollection stats: {collection_stats}")
                 print(f"Update stats: {update_stats}")
@@ -573,7 +565,6 @@ CRITICAL: Code must be syntactically correct Python and return (solution, cost) 
         # Average stats
         if epoch_stats['num_updates'] > 0:
             epoch_stats['policy_loss'] /= epoch_stats['num_updates']
-            epoch_stats['value_loss'] /= epoch_stats['num_updates']
             epoch_stats['avg_reward'] /= epoch_stats['num_updates']
             epoch_stats['avg_score'] /= epoch_stats['num_updates']
 
@@ -583,7 +574,6 @@ CRITICAL: Code must be syntactically correct Python and return (solution, cost) 
         self.stats['total_updates'] += epoch_stats['num_updates']
         self.stats['avg_scores'].append(epoch_stats['avg_score'])
         self.stats['policy_losses'].append(epoch_stats['policy_loss'])
-        self.stats['value_losses'].append(epoch_stats['value_loss'])
 
         logger.info(f"\n{'=' * 80}")
         logger.info(f"Epoch {epoch} Summary:")
@@ -591,7 +581,6 @@ CRITICAL: Code must be syntactically correct Python and return (solution, cost) 
         logger.info(f"  Avg real workflow score: {epoch_stats['avg_score']:.4f}")
         logger.info(f"  Updates: {epoch_stats['num_updates']}")
         logger.info(f"  Policy loss: {epoch_stats['policy_loss']:.4f}")
-        logger.info(f"  Value loss: {epoch_stats['value_loss']:.4f}")
         logger.info(f"{'=' * 80}")
 
         # Evaluate on TEST set at end of epoch

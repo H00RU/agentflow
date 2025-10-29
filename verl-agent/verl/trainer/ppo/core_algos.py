@@ -64,49 +64,50 @@ def get_kl_controller(kl_ctrl):
         raise NotImplementedError
 
 
-def compute_gae_advantage_return(
-    token_level_rewards: torch.Tensor,
-    values: torch.Tensor,
-    response_mask: torch.Tensor,
-    gamma: torch.Tensor,
-    lam: torch.Tensor,
-):
-    """Adapted from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py
-
-    Args:
-        token_level_rewards: `(torch.Tensor)`
-            shape is (bs, response_length)
-        values: `(torch.Tensor)`
-            shape is (bs, response_length)
-        response_mask: `(torch.Tensor)`
-            shape is (bs, response_length). [EOS] mask. The token after [EOS] have mask zero.
-        gamma is `(float)`
-            discounted factor used in RL
-        lam: `(float)`
-            lambda value when computing Generalized Advantage Estimation (https://arxiv.org/abs/1506.02438)
-
-    Returns:
-        advantages: `(torch.Tensor)`
-            shape: (bs, response_length)
-        Returns: `(torch.Tensor)`
-            shape: (bs, response_length)
-
-    """
-    with torch.no_grad():
-        lastgaelam = 0
-        advantages_reversed = []
-        gen_len = token_level_rewards.shape[-1]
-
-        for t in reversed(range(gen_len)):
-            nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
-            delta = token_level_rewards[:, t] + gamma * nextvalues - values[:, t]
-            lastgaelam = delta + gamma * lam * lastgaelam
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1], dim=1)
-
-        returns = advantages + values
-        advantages = verl_F.masked_whiten(advantages, response_mask)
-    return advantages, returns
+# REMOVED: GAE advantage computation - using GRPO uniformly
+# def compute_gae_advantage_return(
+#     token_level_rewards: torch.Tensor,
+#     values: torch.Tensor,
+#     response_mask: torch.Tensor,
+#     gamma: torch.Tensor,
+#     lam: torch.Tensor,
+# ):
+#     """Adapted from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py
+#
+#     Args:
+#         token_level_rewards: `(torch.Tensor)`
+#             shape is (bs, response_length)
+#         values: `(torch.Tensor)`
+#             shape is (bs, response_length)
+#         response_mask: `(torch.Tensor)`
+#             shape is (bs, response_length). [EOS] mask. The token after [EOS] have mask zero.
+#         gamma is `(float)`
+#             discounted factor used in RL
+#         lam: `(float)`
+#             lambda value when computing Generalized Advantage Estimation (https://arxiv.org/abs/1506.02438)
+#
+#     Returns:
+#         advantages: `(torch.Tensor)`
+#             shape: (bs, response_length)
+#         Returns: `(torch.Tensor)`
+#             shape: (bs, response_length)
+#
+#     """
+#     with torch.no_grad():
+#         lastgaelam = 0
+#         advantages_reversed = []
+#         gen_len = token_level_rewards.shape[-1]
+#
+#         for t in reversed(range(gen_len)):
+#             nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
+#             delta = token_level_rewards[:, t] + gamma * nextvalues - values[:, t]
+#             lastgaelam = delta + gamma * lam * lastgaelam
+#             advantages_reversed.append(lastgaelam)
+#         advantages = torch.stack(advantages_reversed[::-1], dim=1)
+#
+#         returns = advantages + values
+#         advantages = verl_F.masked_whiten(advantages, response_mask)
+#     return advantages, returns
 
 
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.
@@ -116,7 +117,7 @@ def compute_grpo_outcome_advantage(
     index: np.ndarray,
     traj_index: np.ndarray,
     epsilon: float = 1e-6,
-    norm_adv_by_std_in_grpo: str = True,
+    norm_adv_by_std_in_grpo: bool = True,
     compute_mean_std_cross_steps: bool = True,
 ):
     """
@@ -174,217 +175,6 @@ def compute_grpo_outcome_advantage(
     return scores, scores
 
 
-def compute_grpo_passk_outcome_advantage(
-    token_level_rewards: torch.Tensor,
-    response_mask: torch.Tensor,
-    index: np.ndarray,
-    traj_index: np.ndarray,
-    epsilon: float = 1e-6,
-    norm_adv_by_std_in_grpo: bool = True,
-    compute_mean_std_cross_steps: bool = True,
-):
-    """
-    Compute advantage for Pass@k using a GRPO-style outcome reward formulation.
-    Only the best response per group gets a non-zero advantage: r_max - r_second_max.
-
-    Implemented as described in https://arxiv.org/abs/2503.19595.
-
-    Args:
-        token_level_rewards: (bs, response_length)
-        response_mask: (bs, response_length)
-        index: (bs,) → group ID per sample
-        epsilon: float for numerical stability
-        norm_adv_by_std_in_grpo: if True, normalize advantage by std within group
-        compute_mean_std_cross_steps: bool
-            If True (more stable), the mean and std are computed across steps within one group. 
-            If False (i.e., standard episode-level adv), the mean and std are computed across trajectories within one group.
-
-    Returns:
-        advantages: (bs, response_length)
-        returns: (bs, response_length)
-    """
-    scores = token_level_rewards.sum(dim=-1)  # (bs,)
-    advantages = torch.zeros_like(scores)
-
-    id2scores = defaultdict(list)
-    id2indices = defaultdict(list)
-    seen_pairs = set()
-    with torch.no_grad():
-        bsz = scores.shape[0]
-        for i in range(bsz):
-            if (index[i], traj_index[i]) in seen_pairs:
-                continue
-            idx = index[i]
-            id2scores[idx].append(scores[i])
-            id2indices[idx].append(i)
-            if not compute_mean_std_cross_steps:
-                seen_pairs.add((index[i], traj_index[i]))
-        for idx in id2scores:
-            rewards = torch.stack(id2scores[idx])  # (k,)
-            if rewards.numel() < 2:
-                raise ValueError(f"Pass@k requires at least 2 samples per group. Got {rewards.numel()} for group {idx}.")
-            topk, topk_idx = torch.topk(rewards, 2)
-            r_max, r_second_max = topk[0], topk[1]
-            i_max = id2indices[idx][topk_idx[0].item()]
-            advantage = r_max - r_second_max
-            if norm_adv_by_std_in_grpo:
-                std = torch.std(rewards)
-                advantage = advantage / (std + epsilon)
-            advantages[i_max] = advantage
-
-    advantages = advantages.unsqueeze(-1) * response_mask
-    return advantages, advantages
-
-
-def compute_reinforce_plus_plus_baseline_outcome_advantage(token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, traj_index: np.ndarray, epsilon: float = 1e-6, compute_mean_std_cross_steps: bool = True):
-    """
-    Compute advantage for RF++-baseline (https://arxiv.org/abs/2501.03262), operating only on Outcome reward
-    (with only one scalar reward for each response).
-    Args:
-        token_level_rewards: `(torch.Tensor)`
-            shape: (bs, response_length)
-        response_mask: `(torch.Tensor)`
-            shape: (bs, response_length)
-
-    Returns:
-        advantages: `(torch.Tensor)`
-            shape: (bs, response_length)
-        Returns: `(torch.Tensor)`
-            shape: (bs, response_length)
-    """
-    response_length = token_level_rewards.shape[-1]
-    scores = token_level_rewards.sum(dim=-1)
-
-    id2score = defaultdict(list)
-    id2mean = {}
-    seen_pairs = set()
-    with torch.no_grad():
-        bsz = scores.shape[0]
-        for i in range(bsz):
-            if (index[i], traj_index[i]) in seen_pairs:
-                continue
-            id2score[index[i]].append(scores[i])
-            if not compute_mean_std_cross_steps:
-                seen_pairs.add((index[i], traj_index[i]))
-        for idx in id2score:
-            if len(id2score[idx]) == 1:
-                id2mean[idx] = torch.tensor(0.0)
-            elif len(id2score[idx]) > 1:
-                id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
-            else:
-                raise ValueError(f"no score in prompt index: {idx}")
-        for i in range(bsz):
-            scores[i] = scores[i] - id2mean[index[i]]
-
-        scores = scores.unsqueeze(-1).tile([1, response_length]) * response_mask
-        scores = verl_F.masked_whiten(scores, response_mask) * response_mask
-
-    return scores, scores
-
-
-def compute_rloo_outcome_advantage(token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: np.ndarray, traj_index: np.ndarray, epsilon: float = 1e-6, compute_mean_std_cross_steps: bool = True):
-    """
-    Compute advantage for RLOO based on https://arxiv.org/abs/2402.14740
-    Args:
-        token_level_rewards: `(torch.Tensor)`
-            shape: (bs, response_length)
-        response_mask: `(torch.Tensor)`
-            shape: (bs, response_length)
-
-    Returns:
-        advantages: `(torch.Tensor)`
-            shape: (bs, response_length)
-        Returns: `(torch.Tensor)`
-            shape: (bs, response_length)
-    """
-    scores = token_level_rewards.sum(dim=-1)
-
-    id2score = defaultdict(list)
-    id2mean = {}
-    seen_pairs = set()
-    with torch.no_grad():
-        bsz = scores.shape[0]
-        for i in range(bsz):
-            if (index[i], traj_index[i]) in seen_pairs:
-                continue
-            id2score[index[i]].append(scores[i])
-            if not compute_mean_std_cross_steps:
-                seen_pairs.add((index[i], traj_index[i]))
-        for idx in id2score:
-            if len(id2score[idx]) == 1:
-                id2mean[idx] = torch.tensor(0.0)
-            elif len(id2score[idx]) > 1:
-                id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
-            else:
-                raise ValueError(f"no score in prompt index: {idx}")
-        for i in range(bsz):
-            response_num = len(id2score[index[i]])
-            if response_num > 1:
-                scores[i] = scores[i] * response_num / (response_num - 1) - id2mean[index[i]] * response_num / (response_num - 1)
-        scores = scores.unsqueeze(-1) * response_mask
-
-    return scores, scores
-
-
-def compute_reinforce_plus_plus_outcome_advantage(token_level_rewards: torch.Tensor, response_mask: torch.Tensor, gamma: torch.Tensor):
-    """
-    Compute advantage for REINFORCE++.
-    This implementation is based on the paper: https://arxiv.org/abs/2501.03262
-    Args:
-        token_level_rewards: `(torch.Tensor)`
-            shape: (bs, response_length)
-        response_mask: `(torch.Tensor)`
-            shape: (bs, response_length)
-
-    Returns:
-        advantages: `(torch.Tensor)`
-            shape: (bs, response_length)
-        Returns: `(torch.Tensor)`
-            shape: (bs, response_length)
-    """
-
-    with torch.no_grad():
-        returns = torch.zeros_like(token_level_rewards)
-        running_return = 0
-
-        for t in reversed(range(token_level_rewards.shape[1])):
-            running_return = token_level_rewards[:, t] + gamma * running_return
-            returns[:, t] = running_return
-            # Reset after EOS
-            running_return = running_return * response_mask[:, t]
-
-        advantages = verl_F.masked_whiten(returns, response_mask)
-        advantages = advantages * response_mask
-
-    return advantages, returns
-
-
-def compute_remax_outcome_advantage(token_level_rewards: torch.Tensor, reward_baselines: torch.Tensor, response_mask: torch.Tensor):
-    """
-    Compute advantage for ReMax, operating only on Outcome reward
-    This implementation is based on the paper: https://arxiv.org/abs/2310.10505
-
-    (with only one scalar reward for each response).
-    Args:
-        token_level_rewards: `(torch.Tensor)`
-            shape: (bs, response_length)
-        reward_baselines: `(torch.Tensor)`
-            shape: (bs,)
-        response_mask: `(torch.Tensor)`
-            shape: (bs, response_length)
-
-    Returns:
-        advantages: `(torch.Tensor)`
-            shape: (bs, response_length)
-        Returns: `(torch.Tensor)`
-            shape: (bs, response_length)
-    """
-
-    with torch.no_grad():
-        returns = (token_level_rewards * response_mask).flip(dims=[-1]).cumsum(dim=-1).flip(dims=[-1])
-        advantages = returns - reward_baselines.unsqueeze(-1) * response_mask
-
-    return advantages, returns
 
 
 def compute_rewards(token_level_scores, old_log_prob, ref_log_prob, kl_ratio):
@@ -509,39 +299,40 @@ def compute_entropy_loss(logits, response_mask, loss_agg_mode: str = "token-mean
     return entropy_loss
 
 
-def compute_value_loss(vpreds: torch.Tensor, returns: torch.Tensor, values: torch.Tensor, response_mask: torch.Tensor, cliprange_value: float, loss_agg_mode: str = "token-mean"):
-    """
-    Compute the clipped value-function loss for PPO.
-
-    Copied from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py#L1151
-
-    Args:
-        vpreds (torch.FloatTensor):
-            Predicted values from the value head, shape (batch_size, response_length).
-        values (torch.FloatTensor):
-            Old (baseline) values from the value head, shape (batch_size, response_length).
-        returns (torch.FloatTensor):
-            Ground-truth returns, shape (batch_size, response_length).
-        response_mask (torch.Tensor):
-            Mask indicating which tokens to include in the value loss calculation.
-        cliprange_value (float):
-            Clip range for value prediction updates.
-        loss_agg_mode (str, optional):
-            Aggregation mode for `agg_loss`. Defaults to "token-mean".
-
-    Returns:
-        vf_loss (torch.FloatTensor):
-            A scalar tensor containing the aggregated value-function loss.
-        vf_clipfrac (float):
-            Fraction of elements where the clipped loss was used.
-    """
-    vpredclipped = verl_F.clip_by_value(vpreds, values - cliprange_value, values + cliprange_value)
-    vf_losses1 = (vpreds - returns) ** 2
-    vf_losses2 = (vpredclipped - returns) ** 2
-    clipped_vf_losses = torch.max(vf_losses1, vf_losses2)
-    vf_loss = agg_loss(loss_mat=clipped_vf_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
-    vf_clipfrac = verl_F.masked_mean(torch.gt(vf_losses2, vf_losses1).float(), response_mask)
-    return vf_loss, vf_clipfrac
+# REMOVED: Value loss computation - using GRPO uniformly (no critic/value function)
+# def compute_value_loss(vpreds: torch.Tensor, returns: torch.Tensor, values: torch.Tensor, response_mask: torch.Tensor, cliprange_value: float, loss_agg_mode: str = "token-mean"):
+#     """
+#     Compute the clipped value-function loss for PPO.
+#
+#     Copied from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py#L1151
+#
+#     Args:
+#         vpreds (torch.FloatTensor):
+#             Predicted values from the value head, shape (batch_size, response_length).
+#         values (torch.FloatTensor):
+#             Old (baseline) values from the value head, shape (batch_size, response_length).
+#         returns (torch.FloatTensor):
+#             Ground-truth returns, shape (batch_size, response_length).
+#         response_mask (torch.Tensor):
+#             Mask indicating which tokens to include in the value loss calculation.
+#         cliprange_value (float):
+#             Clip range for value prediction updates.
+#         loss_agg_mode (str, optional):
+#             Aggregation mode for `agg_loss`. Defaults to "token-mean".
+#
+#     Returns:
+#         vf_loss (torch.FloatTensor):
+#             A scalar tensor containing the aggregated value-function loss.
+#         vf_clipfrac (float):
+#             Fraction of elements where the clipped loss was used.
+#     """
+#     vpredclipped = verl_F.clip_by_value(vpreds, values - cliprange_value, values + cliprange_value)
+#     vf_losses1 = (vpreds - returns) ** 2
+#     vf_losses2 = (vpredclipped - returns) ** 2
+#     clipped_vf_losses = torch.max(vf_losses1, vf_losses2)
+#     vf_loss = agg_loss(loss_mat=clipped_vf_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+#     vf_clipfrac = verl_F.masked_mean(torch.gt(vf_losses2, vf_losses1).float(), response_mask)
+#     return vf_loss, vf_clipfrac
 
 
 def kl_penalty(logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor, kl_penalty) -> torch.FloatTensor:

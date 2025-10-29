@@ -106,22 +106,23 @@ def create_huggingface_actor(model_name: str, override_config_kwargs=None, autom
     return module
 
 
-def create_huggingface_critic(model_name: str, override_config_kwargs=None, automodel_kwargs=None) -> nn.Module:
-    """
-
-    Args:
-        model_name:
-        override_config_kwargs:
-
-    Returns:
-
-    """
-    critic_module: nn.Module = create_huggingface_actor(model_name, override_config_kwargs=override_config_kwargs, automodel_kwargs=automodel_kwargs)
-    if automodel_kwargs is None:
-        automodel_kwargs = {}
-    torch_dtype = automodel_kwargs.get("torch_dtype", torch.float32)
-    critic_module.lm_head = nn.Sequential(nn.Linear(critic_module.config.hidden_size, 1, dtype=torch_dtype), LambdaLayer(fn=squeeze))
-    return critic_module
+# REMOVED: Critic creation - using GRPO uniformly (no critic/value function)
+# def create_huggingface_critic(model_name: str, override_config_kwargs=None, automodel_kwargs=None) -> nn.Module:
+#     """
+#
+#     Args:
+#         model_name:
+#         override_config_kwargs:
+#
+#     Returns:
+#
+#     """
+#     critic_module: nn.Module = create_huggingface_actor(model_name, override_config_kwargs=override_config_kwargs, automodel_kwargs=automodel_kwargs)
+#     if automodel_kwargs is None:
+#         automodel_kwargs = {}
+#     torch_dtype = automodel_kwargs.get("torch_dtype", torch.float32)
+#     critic_module.lm_head = nn.Sequential(nn.Linear(critic_module.config.hidden_size, 1, dtype=torch_dtype), LambdaLayer(fn=squeeze))
+#     return critic_module
 
 
 def get_model_size(model: nn.Module, scale="auto"):

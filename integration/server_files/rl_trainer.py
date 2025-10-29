@@ -4,13 +4,13 @@ RL Trainer for End-to-End Training
 
 This module implements:
 1. Trajectory collection from AFlow environments
-2. Advantage computation using workflow-specific GiGPO
+2. Advantage computation using standard GRPO
 3. Policy and value loss computation
 4. Gradient updates
 
 此模块实现：
 1. 从 AFlow 环境收集轨迹
-2. 使用工作流特定 GiGPO 计算优势
+2. 使用标准 GRPO 计算优势
 3. 策略和价值损失计算
 4. 梯度更新
 """
@@ -23,9 +23,9 @@ from collections import defaultdict
 import sys
 import os
 
-# Import GiGPO
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'verl-agent'))
-from gigpo.workflow_gigpo import compute_workflow_gigpo_advantage
+# REMOVED: GiGPO import - GiGPO found to be unstable, using GRPO uniformly
+# sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'verl-agent'))
+# from gigpo.workflow_gigpo import compute_workflow_gigpo_advantage
 
 
 class RolloutBuffer:
@@ -38,7 +38,6 @@ class RolloutBuffer:
         self.observations = []
         self.actions = []
         self.log_probs = []
-        self.values = []
         self.rewards = []
         self.dones = []
         self.response_masks = []
@@ -54,7 +53,6 @@ class RolloutBuffer:
         obs: str,
         action: str,
         log_prob: torch.Tensor,
-        value: torch.Tensor,
         reward: float,
         done: bool,
         response_mask: torch.Tensor,
@@ -63,11 +61,10 @@ class RolloutBuffer:
         episode_idx: int = 0,
         traj_idx: int = 0
     ):
-        """Add a step to the buffer"""
+        """Add a step to the buffer (GRPO: no values)"""
         self.observations.append(obs)
         self.actions.append(action)
         self.log_probs.append(log_prob.detach().cpu())
-        self.values.append(value.detach().cpu())
         self.rewards.append(reward)
         self.dones.append(done)
         self.response_masks.append(response_mask.detach().cpu())
@@ -82,10 +79,9 @@ class RolloutBuffer:
         self.__init__()
 
     def get(self) -> Dict[str, Any]:
-        """Get all data from buffer"""
+        """Get all data from buffer (GRPO: no values)"""
         # Handle variable-length sequences by padding
         log_probs_padded = None
-        values_padded = None
         response_masks_padded = None
 
         if self.log_probs:
@@ -102,25 +98,6 @@ class RolloutBuffer:
                     lp_padded = lp
                 log_probs_list.append(lp_padded)
             log_probs_padded = torch.stack(log_probs_list)
-
-        if self.values:
-            # Values should all be same shape already, but handle just in case
-            if all(v.shape == self.values[0].shape for v in self.values):
-                values_padded = torch.stack(self.values)
-            else:
-                # Pad if needed
-                max_len = max(v.shape[1] if len(v.shape) > 1 else 1 for v in self.values)
-                values_list = []
-                for v in self.values:
-                    if len(v.shape) == 1:
-                        v = v.unsqueeze(1)
-                    if v.shape[1] < max_len:
-                        padding = torch.zeros(v.shape[0], max_len - v.shape[1], dtype=v.dtype)
-                        v_padded = torch.cat([v, padding], dim=1)
-                    else:
-                        v_padded = v
-                    values_list.append(v_padded)
-                values_padded = torch.stack(values_list)
 
         if self.response_masks:
             # Pad response_masks to max length
@@ -140,7 +117,6 @@ class RolloutBuffer:
             'observations': self.observations,
             'actions': self.actions,
             'log_probs': log_probs_padded,
-            'values': values_padded,
             'rewards': torch.tensor(self.rewards, dtype=torch.float32),
             'dones': torch.tensor(self.dones, dtype=torch.bool),
             'response_masks': response_masks_padded,
@@ -161,34 +137,26 @@ class RLTrainer:
         self,
         policy,
         learning_rate: float = 1e-5,
-        value_coef: float = 0.5,
         entropy_coef: float = 0.01,
         max_grad_norm: float = 1.0,
-        gamma: float = 0.99,
-        gae_lambda: float = 0.95,
+        gamma: float = 0.99,  # Kept for compatibility, not used in GRPO
         ppo_epochs: int = 4,
         ppo_clip: float = 0.2,
         batch_size: int = 32,
-        use_gigpo: bool = True,
-        gigpo_config: Optional[Dict] = None,
         device: str = "cuda"
     ):
         """
-        Initialize RL trainer
+        Initialize RL trainer for GRPO (no value loss)
 
         Args:
             policy: Trainable policy (TrainableQwenPolicy)
             learning_rate: Learning rate for optimizer
-            value_coef: Coefficient for value loss
             entropy_coef: Coefficient for entropy bonus
             max_grad_norm: Max gradient norm for clipping
-            gamma: Discount factor
-            gae_lambda: GAE lambda for advantage estimation
+            gamma: Discount factor (kept for compatibility, not used in GRPO)
             ppo_epochs: Number of PPO update epochs
             ppo_clip: PPO clipping parameter
             batch_size: Batch size for updates
-            use_gigpo: Use workflow-specific GiGPO
-            gigpo_config: Configuration for GiGPO
             device: Training device
         """
         self.policy = policy
@@ -196,25 +164,12 @@ class RLTrainer:
 
         # Hyperparameters
         self.learning_rate = learning_rate
-        self.value_coef = value_coef
         self.entropy_coef = entropy_coef
         self.max_grad_norm = max_grad_norm
-        self.gamma = gamma
-        self.gae_lambda = gae_lambda
+        self.gamma = gamma  # Kept for compatibility, not used in GRPO
         self.ppo_epochs = ppo_epochs
         self.ppo_clip = ppo_clip
         self.batch_size = batch_size
-
-        # GiGPO
-        self.use_gigpo = use_gigpo
-        self.gigpo_config = gigpo_config or {
-            'epsilon': 1e-6,
-            'step_advantage_w': 1.0,
-            'mode': 'mean_norm',
-            'enable_similarity': True,
-            'similarity_thresh': 0.95,
-            'workflow_similarity_thresh': 0.8
-        }
 
         # Optimizer
         self.optimizer = torch.optim.AdamW(
@@ -226,22 +181,21 @@ class RLTrainer:
         # Rollout buffer
         self.buffer = RolloutBuffer()
 
-        # Statistics
+        # Statistics (GRPO: no value loss)
         self.train_stats = {
             'policy_loss': [],
-            'value_loss': [],
             'entropy': [],
             'total_loss': [],
             'approx_kl': [],
             'clip_fraction': []
         }
 
-        print(f"[RLTrainer] Initialized with:")
+        print(f"[RLTrainer] Initialized for GRPO:")
         print(f"  - Learning rate: {learning_rate}")
-        print(f"  - Value coef: {value_coef}, Entropy coef: {entropy_coef}")
+        print(f"  - Entropy coef: {entropy_coef}")
         print(f"  - PPO epochs: {ppo_epochs}, Clip: {ppo_clip}")
         print(f"  - Batch size: {batch_size}")
-        print(f"  - Use GiGPO: {use_gigpo}")
+        print(f"  - Advantage Estimator: GRPO")
 
     def collect_rollout(
         self,
@@ -279,37 +233,33 @@ class RLTrainer:
                 if all(done_list):
                     break
 
-                # Get actions from policy
+                # Get actions from policy (GRPO: no values)
                 actions = []
                 log_probs_list = []
-                values_list = []
                 response_masks_list = []
 
                 for i, (obs, done) in enumerate(zip(obs_list, done_list)):
                     if not done:
-                        action, log_probs, values, response_mask = self.policy.get_action_and_value(obs)
+                        action, log_probs, response_mask = self.policy.get_action_and_value(obs)
 
                         actions.append(action)
                         log_probs_list.append(log_probs)
-                        values_list.append(values)
                         response_masks_list.append(response_mask)
                     else:
                         actions.append("")
                         log_probs_list.append(None)
-                        values_list.append(None)
                         response_masks_list.append(None)
 
                 # Step environment
                 next_obs_list, reward_list, done_list, info_list = env.step(actions)
 
-                # Store transitions
+                # Store transitions (GRPO: no values)
                 for i in range(len(obs_list)):
                     if log_probs_list[i] is not None:
                         self.buffer.add(
                             obs=obs_list[i],
                             action=actions[i],
                             log_prob=log_probs_list[i],
-                            value=values_list[i],
                             reward=reward_list[i],
                             done=done_list[i],
                             response_mask=response_masks_list[i],
@@ -338,91 +288,113 @@ class RLTrainer:
 
         return collection_stats
 
-    def compute_advantages_gigpo(
+    # REMOVED: GiGPO advantage computation - GiGPO found to be unstable, using GRPO uniformly
+    # def compute_advantages_gigpo(...):
+    #     """Compute advantages using workflow-specific GiGPO"""
+    #     ...
+
+    def compute_advantages_grpo(
         self,
         rewards: torch.Tensor,
-        values: torch.Tensor,
         response_masks: torch.Tensor,
-        workflow_nodes: np.array,
-        workflow_states: List,
         episode_indices: np.array,
         trajectory_indices: np.array,
-        anchor_obs: np.array
+        epsilon: float = 1e-6
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Compute advantages using workflow-specific GiGPO
-        使用工作流特定 GiGPO 计算优势
+        Compute advantages using standard GRPO (Group Relative Policy Optimization)
+        使用标准 GRPO 计算优势
 
         Args:
-            rewards: Rewards (bs, seq_len)
-            values: Values (bs, seq_len)
+            rewards: Rewards (bs, seq_len) or (bs,)
             response_masks: Response masks (bs, seq_len)
-            workflow_nodes: Workflow node IDs (bs,)
-            workflow_states: List of workflow states
-            episode_indices: Episode indices (bs,)
-            trajectory_indices: Trajectory indices (bs,)
-            anchor_obs: Anchor observations for grouping (bs,)
+            episode_indices: Episode indices (bs,) for grouping
+            trajectory_indices: Trajectory indices (bs,) for grouping
+            epsilon: Small value to avoid division by zero
 
         Returns:
             Tuple: (advantages, returns)
         """
-        # Compute token-level rewards (approximation: broadcast step rewards)
-        token_level_rewards = rewards.unsqueeze(-1) * response_masks  # (bs, seq_len)
+        print(f"DEBUG compute_advantages_grpo: rewards shape = {rewards.shape}, response_masks shape = {response_masks.shape}")
 
-        # Compute step rewards (mean over tokens)
-        step_rewards = (token_level_rewards * response_masks).sum(dim=1) / response_masks.sum(dim=1).clamp(min=1)
+        # Handle reward shape
+        if len(rewards.shape) == 1:
+            # rewards is (bs,), expand to (bs, seq_len)
+            token_level_rewards = rewards.unsqueeze(-1) * response_masks
+        elif len(rewards.shape) == 2:
+            # rewards is already (bs, seq_len)
+            token_level_rewards = rewards * response_masks
+        else:
+            raise ValueError(f"Unexpected rewards shape: {rewards.shape}")
 
-        # Use GiGPO
-        advantages, scores = compute_workflow_gigpo_advantage(
-            token_level_rewards=token_level_rewards,
-            step_rewards=step_rewards,
-            response_mask=response_masks,
-            anchor_obs=anchor_obs,
-            index=episode_indices,
-            traj_index=trajectory_indices,
-            workflow_nodes=workflow_nodes,
-            workflow_states=workflow_states,
-            **self.gigpo_config
-        )
+        # Compute episode-level rewards (sum over tokens)
+        episode_rewards = (token_level_rewards * response_masks).sum(dim=1) / response_masks.sum(dim=1).clamp(min=1)
 
-        # Compute returns
-        returns = advantages + values
+        print(f"DEBUG compute_advantages_grpo: episode_rewards shape = {episode_rewards.shape}")
 
-        return advantages, returns
+        # Group by episode_indices and trajectory_indices for relative comparison
+        # Combine indices for grouping
+        group_ids = [f"{ep}_{traj}" for ep, traj in zip(episode_indices, trajectory_indices)]
+        unique_groups = list(set(group_ids))
 
-    def compute_advantages_gae(
-        self,
-        rewards: torch.Tensor,
-        values: torch.Tensor,
-        dones: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Compute advantages using GAE
-        使用 GAE 计算优势
+        advantages = torch.zeros_like(episode_rewards)
 
-        Args:
-            rewards: Rewards (T,)
-            values: Values (T,)
-            dones: Done flags (T,)
+        # Normalize within each group (GRPO core idea)
+        for group_id in unique_groups:
+            group_mask = torch.tensor([gid == group_id for gid in group_ids], dtype=torch.bool, device=rewards.device)
+            group_rewards = episode_rewards[group_mask]
 
-        Returns:
-            Tuple: (advantages, returns)
-        """
-        advantages = torch.zeros_like(rewards)
-        last_gae = 0
-
-        for t in reversed(range(len(rewards))):
-            if t == len(rewards) - 1:
-                next_value = 0
+            if len(group_rewards) > 1:
+                # Normalize by mean and std within group
+                group_mean = group_rewards.mean()
+                group_std = group_rewards.std()
+                advantages[group_mask] = (group_rewards - group_mean) / (group_std + epsilon)
             else:
-                next_value = values[t + 1]
+                # Single item in group, set advantage to 0
+                advantages[group_mask] = 0.0
 
-            delta = rewards[t] + self.gamma * next_value * (1 - dones[t].float()) - values[t]
-            last_gae = delta + self.gamma * self.gae_lambda * (1 - dones[t].float()) * last_gae
-            advantages[t] = last_gae
+        # Expand advantages to token level
+        advantages = advantages.unsqueeze(-1).expand_as(token_level_rewards)
+        returns = advantages  # For GRPO, returns = advantages
 
-        returns = advantages + values
+        print(f"DEBUG compute_advantages_grpo: advantages shape = {advantages.shape}")
+
         return advantages, returns
+
+    # REMOVED: GAE advantage computation - using GRPO uniformly
+    # def compute_advantages_gae(
+    #     self,
+    #     rewards: torch.Tensor,
+    #     values: torch.Tensor,
+    #     dones: torch.Tensor
+    # ) -> Tuple[torch.Tensor, torch.Tensor]:
+    #     """
+    #     Compute advantages using GAE
+    #     使用 GAE 计算优势
+    #
+    #     Args:
+    #         rewards: Rewards (T,)
+    #         values: Values (T,)
+    #         dones: Done flags (T,)
+    #
+    #     Returns:
+    #         Tuple: (advantages, returns)
+    #     """
+    #     advantages = torch.zeros_like(rewards)
+    #     last_gae = 0
+    #
+    #     for t in reversed(range(len(rewards))):
+    #         if t == len(rewards) - 1:
+    #             next_value = 0
+    #         else:
+    #             next_value = values[t + 1]
+    #
+    #         delta = rewards[t] + self.gamma * next_value * (1 - dones[t].float()) - values[t]
+    #         last_gae = delta + self.gamma * self.gae_lambda * (1 - dones[t].float()) * last_gae
+    #         advantages[t] = last_gae
+    #
+    #     returns = advantages + values
+    #     return advantages, returns
 
     def update(self) -> Dict[str, float]:
         """
@@ -439,34 +411,21 @@ class RLTrainer:
             print("[RLTrainer] Warning: Empty buffer, skipping update")
             return {}
 
-        # Move to device
+        # Move to device (GRPO: no values)
         log_probs_old = data['log_probs'].to(self.device)
-        values = data['values'].to(self.device)
         rewards = data['rewards'].to(self.device)
         dones = data['dones'].to(self.device)
         response_masks = data['response_masks'].to(self.device)
 
-        # Compute advantages
-        if self.use_gigpo and data['workflow_nodes'] is not None:
-            print("[RLTrainer] Computing advantages using workflow-specific GiGPO")
-            advantages, returns = self.compute_advantages_gigpo(
-                rewards=rewards,
-                values=values,
-                response_masks=response_masks,
-                workflow_nodes=data['workflow_nodes'],
-                workflow_states=data['workflow_states'],
-                episode_indices=data['episode_indices'],
-                trajectory_indices=data['trajectory_indices'],
-                anchor_obs=np.array(data['observations'])
-            )
-        else:
-            print("[RLTrainer] Computing advantages using GAE")
-            # Flatten for GAE
-            values_flat = values.mean(dim=1)  # (bs,)
-            advantages, returns = self.compute_advantages_gae(rewards, values_flat, dones)
-            # Expand for token-level - match log_probs shape
-            advantages = advantages.unsqueeze(-1).expand_as(log_probs_old)
-            returns = returns.unsqueeze(-1).unsqueeze(-1).expand_as(values)  # FIX: add extra unsqueeze
+        # Compute advantages using standard GRPO
+        # NOTE: GiGPO was found to be unstable and has been replaced with GRPO
+        print("[RLTrainer] Computing advantages using GRPO")
+        advantages, returns = self.compute_advantages_grpo(
+            rewards=rewards,
+            response_masks=response_masks,
+            episode_indices=data['episode_indices'],
+            trajectory_indices=data['trajectory_indices']
+        )
 
         advantages = advantages.to(self.device)
         returns = returns.to(self.device)
@@ -474,61 +433,111 @@ class RLTrainer:
         # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        # PPO update
+        # PPO update (GRPO: no value loss)
         update_stats = {
             'policy_loss': 0.0,
-            'value_loss': 0.0,
             'entropy': 0.0,
             'total_loss': 0.0,
             'approx_kl': 0.0,
             'clip_fraction': 0.0
         }
 
+        # Get observations for re-computing log_probs
+        observations = data['observations']
+
         for epoch in range(self.ppo_epochs):
-            # Re-evaluate policy (forward pass)
-            # For simplicity, we'll use the stored observations
-            # In practice, you might want to batch this
+            # ==================================================
+            # GRPO PPO UPDATE (No value loss)
+            # ==================================================
 
-            # Simplified: compute loss on full batch
-            # TODO: Implement mini-batch updates for large rollouts
+            # 1. Re-compute log_probs with gradients
+            # Tokenize all observations
+            inputs_list = []
+            for obs in observations:
+                inputs = self.policy.tokenizer(
+                    obs,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=1024
+                ).to(self.device)
+                inputs_list.append(inputs)
 
-            # Compute new log probs and values by re-running forward pass
-            # For now, use simplified version that doesn't require re-tokenization
+            # Batch forward pass (GRPO: no values)
+            new_log_probs_list = []
+            entropies_list = []
 
-            # Use old log_probs for policy loss (simplified - no actual policy update)
-            # This is a placeholder until full PPO is implemented
-            # Policy loss: maximize advantage-weighted log probs
-            policy_loss = -(log_probs_old.detach() * advantages * response_masks).sum() / response_masks.sum()
+            for i, inputs in enumerate(inputs_list):
+                # Forward pass with gradients
+                outputs = self.policy.forward(
+                    input_ids=inputs['input_ids'],
+                    attention_mask=inputs['attention_mask'],
+                    response_mask=response_masks[i:i+1]
+                )
 
-            # Value loss: MSE between values and returns
-            # Detach returns to avoid backprop through advantage computation
-            value_loss = F.mse_loss(values.squeeze(1), returns.detach().squeeze(1))
+                new_log_probs_list.append(outputs['log_probs'])
 
-            # Entropy (approximation)
-            entropy = -(log_probs_old.detach() * torch.exp(log_probs_old.detach()) * response_masks).sum() / response_masks.sum()
+                # Compute entropy from logits
+                logits = outputs['logits'][:, :-1, :]  # Shift for next-token prediction
+                probs = F.softmax(logits, dim=-1)
+                entropy = -(probs * F.log_softmax(logits, dim=-1)).sum(dim=-1)  # (bs, seq_len-1)
+                entropy = F.pad(entropy, (0, 1), value=0.0)  # Pad to match seq_len
+                entropy = entropy * response_masks[i:i+1]  # Apply mask
+                entropies_list.append(entropy)
 
-            # Total loss (only value_loss has gradients in this simplified version)
-            # Policy update would require re-running forward pass with gradients
-            total_loss = self.value_coef * value_loss
+            # Stack all outputs
+            new_log_probs = torch.cat(new_log_probs_list, dim=0)  # (bs, seq_len)
+            new_entropies = torch.cat(entropies_list, dim=0)  # (bs, seq_len)
 
-            # Backpropagation
+            # 2. Compute PPO ratio
+            # ratio = exp(new_log_probs - old_log_probs)
+            ratio = torch.exp(new_log_probs - log_probs_old)  # (bs, seq_len)
+
+            # 3. Compute policy loss with PPO clipping
+            # Unclipped policy loss
+            policy_loss_unclipped = -advantages * ratio
+
+            # Clipped policy loss
+            ratio_clipped = torch.clamp(ratio, 1.0 - self.ppo_clip, 1.0 + self.ppo_clip)
+            policy_loss_clipped = -advantages * ratio_clipped
+
+            # Take the maximum (most conservative)
+            policy_loss_per_token = torch.max(policy_loss_unclipped, policy_loss_clipped)
+
+            # Apply response mask and average
+            policy_loss = (policy_loss_per_token * response_masks).sum() / response_masks.sum()
+
+            # 4. Compute entropy bonus
+            entropy = (new_entropies * response_masks).sum() / response_masks.sum()
+
+            # 5. Total loss (GRPO: no value loss)
+            total_loss = policy_loss - self.entropy_coef * entropy
+
+            # 7. Compute KL divergence for monitoring
+            with torch.no_grad():
+                approx_kl = ((ratio - 1) - torch.log(ratio)) * response_masks
+                approx_kl = approx_kl.sum() / response_masks.sum()
+
+                # Clip fraction
+                clip_fraction = ((ratio < 1.0 - self.ppo_clip) | (ratio > 1.0 + self.ppo_clip)).float() * response_masks
+                clip_fraction = clip_fraction.sum() / response_masks.sum()
+
+            # 8. Backpropagation
             self.optimizer.zero_grad()
-            if total_loss.requires_grad:
-                total_loss.backward()
-            else:
-                print("[Warning] total_loss does not require grad, skipping backward pass")
+            total_loss.backward()
 
-            # Gradient clipping
+            # 9. Gradient clipping
             torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
 
-            # Update weights
+            # 10. Update weights
             self.optimizer.step()
 
             # Record stats
             update_stats['policy_loss'] += policy_loss.item()
-            update_stats['value_loss'] += value_loss.item()
             update_stats['entropy'] += entropy.item()
             update_stats['total_loss'] += total_loss.item()
+            update_stats['approx_kl'] += approx_kl.item()
+            update_stats['clip_fraction'] += clip_fraction.item()
 
         # Average over epochs
         for key in update_stats:
@@ -537,10 +546,13 @@ class RLTrainer:
         # Clear buffer
         self.buffer.clear()
 
-        print(f"[RLTrainer] Update completed:")
+        print(f"[RLTrainer] ✅ GRPO Update completed:")
         print(f"  - Policy loss: {update_stats['policy_loss']:.4f}")
-        print(f"  - Value loss: {update_stats['value_loss']:.4f}")
+        print(f"  - Entropy: {update_stats['entropy']:.4f}")
         print(f"  - Total loss: {update_stats['total_loss']:.4f}")
+        print(f"  - Approx KL: {update_stats['approx_kl']:.6f}")
+        print(f"  - Clip fraction: {update_stats['clip_fraction']:.4f}")
+        print(f"[RLTrainer] 🎉 Policy (Qwen LoRA) updated with GRPO!")
 
         return update_stats
 

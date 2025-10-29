@@ -68,7 +68,7 @@ rl:
   # RL hyperparameters
   learning_rate: 0.00001  # 学习率 (1e-5)
   value_coef: 0.5  # Value loss系数
-  entropy_coef: 0.01  # Entropy系数
+  entropy_coef: 0.1  # 提高探索性，防止operator使用退化
   gradient_clip: 1.0  # 梯度裁剪
 
   # PPO parameters

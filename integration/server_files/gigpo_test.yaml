@@ -62,7 +62,7 @@ rl:
   gamma: 0.99
   gae_lambda: 0.95
   value_coef: 0.5
-  entropy_coef: 0.01
+  entropy_coef: 0.1  # 提高探索性，防止operator使用退化
   gradient_clip: 1.0
 
   # 关键：启用GiGPO测试

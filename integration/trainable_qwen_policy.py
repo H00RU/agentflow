@@ -1,16 +1,16 @@
 """
-Trainable Qwen Policy for End-to-End RL Training
-可训练的 Qwen 策略，用于端到端 RL 训练
+Trainable Qwen Policy for GRPO (Group Relative Policy Optimization)
+可训练的 Qwen 策略，用于 GRPO（组相对策略优化）
 
-This module extends QwenRLPolicy to support:
+This module implements a pure GRPO policy:
 1. Log probability computation for policy gradient
-2. Value head for advantage estimation
+2. No value head (GRPO uses outcome-based advantages)
 3. Gradient computation and backpropagation
 4. Weight updates via optimizer
 
-此模块扩展 QwenRLPolicy 以支持：
+此模块实现纯 GRPO 策略：
 1. 策略梯度的对数概率计算
-2. 优势估计的价值头
+2. 无价值头（GRPO 使用基于结果的优势）
 3. 梯度计算和反向传播
 4. 通过优化器更新权重
 """
@@ -25,13 +25,13 @@ import numpy as np
 
 class TrainableQwenPolicy(nn.Module):
     """
-    Trainable wrapper for Qwen model with policy and value heads
-    带策略和价值头的可训练 Qwen 模型包装器
+    Trainable wrapper for Qwen model for GRPO (no value head)
+    GRPO 的可训练 Qwen 模型包装器（无价值头）
 
     Architecture:
     - Base: Qwen2.5-7B-Instruct (frozen or LoRA)
-    - Policy head: Projects hidden states to action logits
-    - Value head: Projects hidden states to state value
+    - Policy: Generates actions and computes log probabilities
+    - No value head (GRPO uses outcome-based advantages)
     """
 
     def __init__(
@@ -42,21 +42,19 @@ class TrainableQwenPolicy(nn.Module):
         freeze_base: bool = False,
         use_lora: bool = True,
         lora_r: int = 16,
-        lora_alpha: int = 32,
-        value_head_hidden_dim: int = 1024
+        lora_alpha: int = 32
     ):
         """
-        Initialize trainable Qwen policy
+        Initialize trainable Qwen policy for GRPO (no value head needed)
 
         Args:
             model_path: Path to Qwen model
             device: Device for training
             torch_dtype: Data type for model weights
-            freeze_base: Whether to freeze base model (only train heads)
+            freeze_base: Whether to freeze base model (only train policy)
             use_lora: Use LoRA for efficient fine-tuning
             lora_r: LoRA rank
             lora_alpha: LoRA alpha
-            value_head_hidden_dim: Hidden dimension for value head
         """
         super().__init__()
 
@@ -103,16 +101,11 @@ class TrainableQwenPolicy(nn.Module):
         # Get hidden size from model config
         self.hidden_size = self.base_model.config.hidden_size
 
-        # Value head: hidden_size -> hidden_dim -> 1
-        self.value_head = nn.Sequential(
-            nn.Linear(self.hidden_size, value_head_hidden_dim),
-            nn.ReLU(),
-            nn.Linear(value_head_hidden_dim, 1)
-        ).to(device).to(torch_dtype)  # Match dtype with base model
+        # GRPO: No value head needed (outcome-based advantages only)
 
         print(f"✓ [TrainableQwenPolicy] Model loaded successfully")
         print(f"✓ [TrainableQwenPolicy] Hidden size: {self.hidden_size}")
-        print(f"✓ [TrainableQwenPolicy] Value head: {self.hidden_size} -> {value_head_hidden_dim} -> 1")
+        print(f"✓ [TrainableQwenPolicy] Using GRPO - no value head")
 
         # Training mode
         self.train()
@@ -148,8 +141,8 @@ class TrainableQwenPolicy(nn.Module):
         response_mask: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass to compute logits, log probs, and values
-        前向传播计算 logits、log probs 和 values
+        Forward pass to compute logits and log probs (GRPO - no values)
+        前向传播计算 logits 和 log probs（GRPO - 无需 values）
 
         Args:
             input_ids: Input token IDs (bs, seq_len)
@@ -160,7 +153,6 @@ class TrainableQwenPolicy(nn.Module):
             Dict with:
                 - logits: Token logits (bs, seq_len, vocab_size)
                 - log_probs: Log probabilities of tokens (bs, seq_len)
-                - values: State values (bs, seq_len)
                 - hidden_states: Hidden states (bs, seq_len, hidden_size)
         """
         # Get model outputs
@@ -192,9 +184,6 @@ class TrainableQwenPolicy(nn.Module):
         # Pad to match sequence length
         token_log_probs = F.pad(token_log_probs, (0, 1), value=0.0)  # (bs, seq_len)
 
-        # Compute values from hidden states
-        values = self.value_head(hidden_states).squeeze(-1)  # (bs, seq_len)
-
         # Apply response mask if provided
         if response_mask is not None:
             # Fix: The last position is padded and should be masked out
@@ -203,12 +192,10 @@ class TrainableQwenPolicy(nn.Module):
             response_mask[:, -1] = 0.0  # Mask out the padded position
 
             token_log_probs = token_log_probs * response_mask
-            values = values * response_mask
 
         return {
             'logits': logits,
             'log_probs': token_log_probs,
-            'values': values,
             'hidden_states': hidden_states
         }
 
@@ -217,10 +204,10 @@ class TrainableQwenPolicy(nn.Module):
         obs: str,
         max_new_tokens: int = 200,
         temperature: float = 0.7
-    ) -> Tuple[str, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[str, torch.Tensor, torch.Tensor]:
         """
-        Generate action and compute log_prob + value for training
-        生成动作并计算 log_prob 和 value 用于训练
+        Generate action and compute log_prob for GRPO training (no values)
+        生成动作并计算 log_prob 用于 GRPO 训练（无需 values）
 
         Args:
             obs: Observation text
@@ -228,7 +215,7 @@ class TrainableQwenPolicy(nn.Module):
             temperature: Sampling temperature
 
         Returns:
-            Tuple: (action_text, log_probs, values, response_mask)
+            Tuple: (action_text, log_probs, response_mask)
         """
         # Tokenize observation
         inputs = self.tokenizer(
@@ -284,7 +271,7 @@ class TrainableQwenPolicy(nn.Module):
             eos_mask = (eos_cumsum <= 1).float()
             response_mask = response_mask * eos_mask
 
-        # Forward pass to get log_probs and values
+        # Forward pass to get log_probs (GRPO: no values needed)
         outputs = self.forward(
             input_ids=full_ids,
             attention_mask=full_attention_mask,
@@ -292,57 +279,13 @@ class TrainableQwenPolicy(nn.Module):
         )
 
         log_probs = outputs['log_probs']
-        values = outputs['values']
 
-        return generated_text, log_probs, values, response_mask
-
-    def compute_values(
-        self,
-        observations: List[str]
-    ) -> torch.Tensor:
-        """
-        Compute state values for a batch of observations
-        为一批观测计算状态价值
-
-        Args:
-            observations: List of observation texts
-
-        Returns:
-            torch.Tensor: State values (bs,)
-        """
-        # Tokenize
-        inputs = self.tokenizer(
-            observations,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=1024
-        ).to(self.device)
-
-        # Forward pass
-        outputs = self.forward(
-            input_ids=inputs['input_ids'],
-            attention_mask=inputs['attention_mask']
-        )
-
-        # Take mean value across sequence for each sample
-        values = outputs['values']  # (bs, seq_len)
-        attention_mask = inputs['attention_mask']
-
-        # Average over non-padding tokens
-        masked_values = values * attention_mask
-        sum_values = masked_values.sum(dim=1)
-        count = attention_mask.sum(dim=1)
-
-        avg_values = sum_values / count.clamp(min=1)
-
-        return avg_values
+        return generated_text, log_probs, response_mask
 
     def save_checkpoint(self, path: str):
-        """Save model checkpoint"""
+        """Save model checkpoint (GRPO: no value head)"""
         checkpoint = {
             'base_model': self.base_model.state_dict(),
-            'value_head': self.value_head.state_dict(),
             'config': {
                 'model_path': self.model_path,
                 'hidden_size': self.hidden_size
@@ -352,10 +295,9 @@ class TrainableQwenPolicy(nn.Module):
         print(f"[TrainableQwenPolicy] Checkpoint saved to {path}")
 
     def load_checkpoint(self, path: str):
-        """Load model checkpoint"""
+        """Load model checkpoint (GRPO: no value head)"""
         checkpoint = torch.load(path, map_location=self.device)
         self.base_model.load_state_dict(checkpoint['base_model'])
-        self.value_head.load_state_dict(checkpoint['value_head'])
         print(f"[TrainableQwenPolicy] Checkpoint loaded from {path}")
 
 
@@ -372,15 +314,10 @@ if __name__ == "__main__":
 
     # Test action generation
     obs = "Dataset: HumanEval\nCurrent Score: 0.65\nImprove the workflow."
-    action, log_probs, values, mask = policy.get_action_and_value(obs)
+    action, log_probs, mask = policy.get_action_and_value(obs)
 
     print(f"\nAction: {action}")
     print(f"Log probs shape: {log_probs.shape}")
-    print(f"Values shape: {values.shape}")
     print(f"Mask shape: {mask.shape}")
-
-    # Test value computation
-    values = policy.compute_values([obs, obs])
-    print(f"\nBatch values: {values}")
 
     print("\n✅ TrainableQwenPolicy test passed!")

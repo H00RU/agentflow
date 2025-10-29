@@ -21,8 +21,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'AFlow', 'scrip
 
 from scripts.logs import logger
 from scripts.evaluator import DatasetType
-from workflow_parser import WorkflowParser, WorkflowSpec, DatasetClassifier
 from workflow_evaluator import WorkflowEvaluator
+# Parser已移除 - Qwen直接生成Python代码（对齐原版AFlow）
 
 # 尝试导入动态优化组件
 try:
@@ -66,7 +66,10 @@ class DeepWorkflowEnv:
         use_dynamic_optimizer: bool = False,
         validation_rounds: int = 3,
         rl_weight: float = 0.5,
-        train_test_split: float = 0.8
+        train_test_split: float = 0.8,
+        use_qwen_code_generation: bool = False,
+        qwen_code_generator=None,
+        qwen_max_retries: int = 2
     ):
         """
         初始化真实workflow环境
@@ -85,6 +88,9 @@ class DeepWorkflowEnv:
             validation_rounds: 验证轮数 (仅动态模式)
             rl_weight: RL权重 (仅动态模式，0.0-1.0)
             train_test_split: 训练/测试集划分比例 (默认0.8 = 80% train, 20% test)
+            use_qwen_code_generation: 是否使用Qwen直接生成代码 (MCTS+Qwen，仅动态模式)
+            qwen_code_generator: Qwen policy实例 (用于代码生成)
+            qwen_max_retries: Qwen语法错误时的最大重试次数 (默认2)
         """
         self.dataset = dataset
         self.opt_llm_config = opt_llm_config
@@ -98,6 +104,14 @@ class DeepWorkflowEnv:
         self.use_dynamic_optimizer = use_dynamic_optimizer
         self.validation_rounds = validation_rounds
         self.rl_weight = rl_weight
+
+        # Mini-batch configuration
+        self.mini_batch_size = env_config.get('mini_batch_size', None)  # None = use all samples
+
+        # MCTS + Qwen直接生成相关参数
+        self.use_qwen_code_generation = use_qwen_code_generation
+        self.qwen_code_generator = qwen_code_generator
+        self.qwen_max_retries = qwen_max_retries
 
         # 检查动态模式是否可用
         if use_dynamic_optimizer and not DYNAMIC_OPTIMIZER_AVAILABLE:
@@ -123,9 +137,9 @@ class DeepWorkflowEnv:
             logger.info(f"[DeepWorkflowEnv] ✨ DYNAMIC MODE: Using RLEnhancedOptimizer")
             self._init_dynamic_mode()
         else:
-            # 静态模式：创建workflow解析器
-            logger.info(f"[DeepWorkflowEnv] 📋 STATIC MODE: Using WorkflowParser")
-            self.workflow_parser = WorkflowParser()
+            # 静态模式：Qwen直接生成Python代码（无Parser）
+            logger.info(f"[DeepWorkflowEnv] 📋 STATIC MODE: Qwen → Python Code → Execute")
+            logger.info(f"[DeepWorkflowEnv] ✅ Aligned with original AFlow design (no Parser)")
 
         # 创建evaluator（用于真实测试，根据dataset类型动态选择）
         # 优先尝试使用特定数据集的evaluator，否则使用通用evaluator
@@ -155,6 +169,10 @@ class DeepWorkflowEnv:
         logger.info(f"[DeepWorkflowEnv] Dataset: {dataset}")
         logger.info(f"[DeepWorkflowEnv] Workspace: {self.workspace_path}")
         logger.info(f"[DeepWorkflowEnv] Evaluator sample size: {sample}")
+        if self.mini_batch_size:
+            logger.info(f"[DeepWorkflowEnv] 🎲 Mini-Batch Mode: {self.mini_batch_size} problems/test (random sampling)")
+        else:
+            logger.info(f"[DeepWorkflowEnv] 📊 Full-Batch Mode: {sample} problems/test")
         logger.info(f"[DeepWorkflowEnv] ✅ REAL WORKFLOW EXECUTION ENABLED")
 
     def _init_dynamic_mode(self):
@@ -185,7 +203,11 @@ class DeepWorkflowEnv:
                 rl_weight=self.rl_weight,
                 shared_experience_pool=self.shared_experience_pool,
                 state_manager=self.state_manager,
-                enable_state_tracking=True
+                enable_state_tracking=True,
+                # MCTS + Qwen参数
+                use_qwen_code_generation=self.use_qwen_code_generation,
+                qwen_code_generator=self.qwen_code_generator,
+                qwen_max_retries=self.qwen_max_retries
             )
             self.optimizers.append(optimizer)
 
@@ -301,81 +323,109 @@ class DeepWorkflowEnv:
 
     def _step_static(self, actions: List[str]) -> Tuple[List[str], List[float], List[bool], List[Dict]]:
         """
-        静态模式的step实现
+        静态模式的step实现 - Qwen直接生成Python代码（无Parser）
+
+        完全对齐原版AFlow设计：
+        1. Qwen生成完整Python代码
+        2. 验证语法
+        3. 保存并执行
+        4. 返回真实分数
         """
         next_observations = []
         rewards = []
         dones = []
         info = []
 
-        logger.info(f"[DeepWorkflowEnv] ===== Round {self.current_round} (STATIC) =====")
-        logger.info(f"[DeepWorkflowEnv] Processing {len(actions)} workflow proposals...")
+        logger.info(f"[DeepWorkflowEnv] ===== Round {self.current_round} (STATIC - No Parser) =====")
+        logger.info(f"[DeepWorkflowEnv] Processing {len(actions)} Qwen-generated workflows...")
 
         for i, qwen_action in enumerate(actions):
             try:
-                logger.info(f"[DeepWorkflowEnv] Env {i}: Processing Qwen output...")
+                logger.info(f"[DeepWorkflowEnv] Env {i}: Processing Qwen-generated code...")
                 logger.info(f"[DeepWorkflowEnv] Env {i}: Action preview: {qwen_action[:200]}...")
 
-                # 1. 解析Qwen输出为workflow规格 (传递dataset类型和采样数)
-                workflow_spec = self.workflow_parser.parse_qwen_output(
-                    qwen_action,
-                    dataset_type=self.dataset,
-                    sample_count=self.workflow_sample_count
-                )
+                # 1. 从Qwen输出提取代码（完全对齐原版AFlow）
+                extraction_result = self._extract_code_from_qwen(qwen_action)
 
-                if workflow_spec is None:
-                    logger.error(f"[DeepWorkflowEnv] Env {i}: Failed to parse Qwen output!")
-                    rewards.append(0.0)
+                if extraction_result is None:
+                    logger.error(f"[DeepWorkflowEnv] Env {i}: Failed to extract code from Qwen output!")
+                    logger.error(f"[DeepWorkflowEnv] Env {i}: No <graph> tag found or invalid format")
+                    rewards.append(-0.5)  # 负奖励，引导Qwen学习正确格式
                     next_observations.append(self._construct_observation(
-                        self.current_round, self.best_score, "Parse failed"
+                        self.current_round, self.best_score, "Code extraction failed - use <graph> tags"
                     ))
                     dones.append(False)
-                    info.append({'step': self.current_round, 'error': 'parse_failed'})
+                    info.append({'step': self.current_round, 'error': 'extraction_failed'})
                     continue
 
-                logger.info(f"[DeepWorkflowEnv] Env {i}: Parsed workflow:")
-                logger.info(f"[DeepWorkflowEnv] Env {i}:   Modification: {workflow_spec.modification}")
-                logger.info(f"[DeepWorkflowEnv] Env {i}:   Operators: {workflow_spec.operators}")
+                graph_code = extraction_result['graph']
+                modification = extraction_result['modification']
+                prompt_code = extraction_result.get('prompt', '')
 
-                # 2. 保存workflow代码到文件
+                logger.info(f"[DeepWorkflowEnv] Env {i}: Extracted workflow code:")
+                logger.info(f"[DeepWorkflowEnv] Env {i}:   Modification: {modification}")
+                logger.info(f"[DeepWorkflowEnv] Env {i}:   Code length: {len(graph_code)} chars")
+
+                # 2. 验证Python语法
+                if not self._validate_python_syntax(graph_code):
+                    logger.error(f"[DeepWorkflowEnv] Env {i}: Syntax error in generated code!")
+                    rewards.append(-1.0)  # 强负奖励，引导Qwen生成正确语法
+                    next_observations.append(self._construct_observation(
+                        self.current_round, self.best_score, "Syntax error - check Python code"
+                    ))
+                    dones.append(False)
+                    info.append({'step': self.current_round, 'error': 'syntax_error'})
+                    continue
+
+                logger.info(f"[DeepWorkflowEnv] Env {i}: ✅ Syntax validation passed")
+
+                # 3. 保存workflow代码（使用原版AFlow的方式）
                 round_id = f"{self.current_round}_env{i}"
-                workflow_path = self.workflow_parser.save_workflow_to_file(
-                    workflow_spec,
-                    round_id,
-                    self.workspace_path
+                workflow_path = self._save_workflow_code_aflow_style(
+                    graph_code=graph_code,
+                    prompt_code=prompt_code,
+                    round_id=round_id,
+                    modification=modification
                 )
 
                 logger.info(f"[DeepWorkflowEnv] Env {i}: Workflow code saved to {workflow_path}")
 
-                # 3. 执行真实的workflow测试！
+                # 4. 执行真实的workflow测试！
                 logger.info(f"[DeepWorkflowEnv] Env {i}: ⚡ EXECUTING REAL WORKFLOW TEST...")
                 score = self._execute_workflow_test(round_id, workflow_path)
 
                 self.total_tests_run += 1
 
                 logger.info(f"[DeepWorkflowEnv] Env {i}: ✅ Real test score: {score:.4f}")
-                logger.info(f"[DeepWorkflowEnv] Env {i}: This is a REAL pass@k score from HumanEval!")
+                logger.info(f"[DeepWorkflowEnv] Env {i}: This is a REAL pass@k score!")
 
-                # 4. 更新最佳workflow
+                # 5. 更新最佳workflow
                 if score > self.best_score:
                     logger.info(f"[DeepWorkflowEnv] Env {i}: 🎉 NEW BEST SCORE! {self.best_score:.4f} -> {score:.4f}")
                     self.best_score = score
-                    self.best_workflow = workflow_spec
+                    self.best_workflow = {
+                        'graph': graph_code,
+                        'modification': modification,
+                        'prompt': prompt_code,
+                        'round': round_id,
+                        'score': score
+                    }
 
-                # 5. 记录历史
+                # 6. 记录历史
                 self.workflow_history.append({
                     'round': self.current_round,
                     'env_id': i,
                     'score': score,
-                    'workflow_spec': workflow_spec,
+                    'modification': modification,
+                    'graph_code': graph_code[:500],  # 只记录前500字符
                     'workflow_path': workflow_path
                 })
 
-                # 6. 返回真实分数作为reward
+                # 7. 返回真实分数作为reward
                 reward = float(score)
                 rewards.append(reward)
 
-                # 7. 构造下一个观测
+                # 8. 构造下一个观测
                 next_obs = self._construct_observation(
                     round_num=self.current_round,
                     best_score=self.best_score,
@@ -384,11 +434,11 @@ class DeepWorkflowEnv:
                 )
                 next_observations.append(next_obs)
 
-                # 8. 判断是否结束
+                # 9. 判断是否结束
                 done = self.current_round >= self.max_rounds
                 dones.append(done)
 
-                # 9. Info
+                # 10. Info
                 info_dict = {
                     'step': self.current_round,
                     'round': self.current_round,
@@ -396,8 +446,7 @@ class DeepWorkflowEnv:
                     'score': score,
                     'best_score': self.best_score,
                     'workflow_path': workflow_path,
-                    'operators': workflow_spec.operators,
-                    'modification': workflow_spec.modification,
+                    'modification': modification,
                     'is_best': score == self.best_score
                 }
                 info.append(info_dict)
@@ -523,6 +572,139 @@ class DeepWorkflowEnv:
 
         return next_observations, rewards, dones, info
 
+    def _extract_code_from_qwen(self, qwen_output: str) -> Optional[Dict[str, str]]:
+        """
+        从Qwen输出提取代码 - 完全对齐原版AFlow
+
+        原版AFlow期望LLM返回：
+        <modification>...</modification>
+        <graph>...</graph>
+        <prompt>...</prompt>
+
+        Args:
+            qwen_output: Qwen生成的输出
+
+        Returns:
+            {'graph': str, 'modification': str, 'prompt': str} 或 None
+        """
+        import re
+
+        result = {}
+
+        # 提取 modification
+        modification_pattern = r"<modification>(.*?)</modification>"
+        modification_match = re.search(modification_pattern, qwen_output, re.DOTALL)
+        if modification_match:
+            result['modification'] = modification_match.group(1).strip()
+        else:
+            result['modification'] = "No modification description provided"
+
+        # 提取 graph (必需)
+        graph_pattern = r"<graph>(.*?)</graph>"
+        graph_match = re.search(graph_pattern, qwen_output, re.DOTALL)
+        if not graph_match:
+            logger.error("[DeepWorkflowEnv] No <graph> tag found in Qwen output")
+            return None
+
+        result['graph'] = graph_match.group(1).strip()
+
+        # 提取 prompt (可选)
+        prompt_pattern = r"<prompt>(.*?)</prompt>"
+        prompt_match = re.search(prompt_pattern, qwen_output, re.DOTALL)
+        if prompt_match:
+            result['prompt'] = prompt_match.group(1).strip()
+        else:
+            result['prompt'] = "# Auto-generated - no custom prompts needed\n"
+
+        return result
+
+    def _validate_python_syntax(self, code: str) -> bool:
+        """
+        验证Python代码语法
+
+        Args:
+            code: Python代码字符串
+
+        Returns:
+            bool: 语法是否正确
+        """
+        try:
+            compile(code, '<string>', 'exec')
+            return True
+        except SyntaxError as e:
+            logger.error(f"[DeepWorkflowEnv] Syntax error in code: {e}")
+            logger.error(f"[DeepWorkflowEnv] Error line: {e.lineno}, offset: {e.offset}")
+            logger.error(f"[DeepWorkflowEnv] Error text: {e.text}")
+            return False
+        except Exception as e:
+            logger.error(f"[DeepWorkflowEnv] Unexpected error during syntax check: {e}")
+            return False
+
+    def _save_workflow_code_aflow_style(self,
+                                        graph_code: str,
+                                        prompt_code: str,
+                                        round_id: str,
+                                        modification: str) -> str:
+        """
+        使用原版AFlow的方式保存workflow代码
+
+        原版AFlow: graph_utils.py:147-158
+        - 使用WORKFLOW_TEMPLATE填充
+        - 保存graph.py, prompt.py, __init__.py
+        - 保存modification.txt记录
+
+        Args:
+            graph_code: workflow class代码
+            prompt_code: prompt定义代码
+            round_id: round标识
+            modification: 修改描述
+
+        Returns:
+            str: graph.py的完整路径
+        """
+        from scripts.prompts.optimize_prompt import WORKFLOW_TEMPLATE
+
+        # 创建round目录
+        round_dir = os.path.join(self.workspace_path, f"round_{round_id}")
+        os.makedirs(round_dir, exist_ok=True)
+
+        # 1. 使用WORKFLOW_TEMPLATE生成完整代码（与原版AFlow相同）
+        full_graph_code = WORKFLOW_TEMPLATE.format(
+            graph=graph_code,
+            round=round_id,
+            dataset=self.dataset
+        )
+
+        # 2. 保存graph.py
+        graph_path = os.path.join(round_dir, "graph.py")
+        with open(graph_path, 'w', encoding='utf-8') as f:
+            f.write(full_graph_code)
+
+        # 3. 保存prompt.py
+        prompt_path = os.path.join(round_dir, "prompt.py")
+        with open(prompt_path, 'w', encoding='utf-8') as f:
+            f.write(prompt_code)
+
+        # 4. 保存__init__.py
+        init_path = os.path.join(round_dir, "__init__.py")
+        with open(init_path, 'w', encoding='utf-8') as f:
+            f.write("")
+
+        # 5. 保存modification.txt记录
+        modification_path = os.path.join(round_dir, "modification.txt")
+        with open(modification_path, 'w', encoding='utf-8') as f:
+            f.write(f"Round {round_id} Modification:\n")
+            f.write(f"{modification}\n\n")
+            f.write("This workflow was generated by Qwen (no Parser).\n")
+            f.write("Fully aligned with original AFlow design.\n")
+
+        logger.info(f"[DeepWorkflowEnv] Saved workflow files to {round_dir}")
+        logger.info(f"[DeepWorkflowEnv]   - graph.py: {len(full_graph_code)} chars")
+        logger.info(f"[DeepWorkflowEnv]   - prompt.py: {len(prompt_code)} chars")
+        logger.info(f"[DeepWorkflowEnv]   - modification.txt")
+
+        return graph_path
+
     def _execute_workflow_test(self, round_id: str, workflow_path: str) -> float:
         """
         执行真实的workflow测试
@@ -557,7 +739,14 @@ class DeepWorkflowEnv:
 
             # 使用evaluator执行测试
             # 这会真正运行测试任务并返回pass@k
-            logger.info(f"[DeepWorkflowEnv] Running real {self.dataset} test with sample={self.sample}...")
+            # Mini-batch模式：随机采样mini_batch_size个问题
+            num_problems = self.mini_batch_size if self.mini_batch_size else self.sample
+            use_random_sample = self.mini_batch_size is not None
+
+            if use_random_sample:
+                logger.info(f"[DeepWorkflowEnv] 🎲 Mini-Batch: Testing on {num_problems} random problems...")
+            else:
+                logger.info(f"[DeepWorkflowEnv] 📊 Full-Batch: Testing on {num_problems} problems...")
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -569,9 +758,13 @@ class DeepWorkflowEnv:
                     loop.run_until_complete(self.evaluator.initialize())
                     logger.info(f"[DeepWorkflowEnv] AIMEEvaluator initialized with {len(self.evaluator.problems)} problems")
 
-            # 执行评估
+            # 执行评估（支持mini-batch和随机采样）
             result = loop.run_until_complete(
-                self.evaluator.evaluate_workflow(workflow)
+                self.evaluator.evaluate_workflow(
+                    workflow,
+                    num_problems=num_problems,
+                    random_sample=use_random_sample
+                )
             )
 
             loop.close()
@@ -664,8 +857,11 @@ def create_deep_workflow_env(dataset, opt_llm_config, exec_llm_config, **kwargs)
     创建深度workflow环境的工厂函数
 
     支持两种模式：
-    - use_dynamic_optimizer=False (默认): 静态模式，使用 WorkflowParser
-    - use_dynamic_optimizer=True: 动态模式，使用 RLEnhancedOptimizer
+    - use_dynamic_optimizer=False (默认): 静态模式，Qwen直接生成代码
+    - use_dynamic_optimizer=True: 动态模式，使用 RLEnhancedOptimizer（MCTS）
+
+    MCTS+Qwen：use_dynamic_optimizer=True + use_qwen_code_generation=True
+    - MCTS树搜索 + Qwen直接生成代码（而非GPT-4）
     """
     return DeepWorkflowEnv(
         dataset=dataset,
@@ -680,7 +876,11 @@ def create_deep_workflow_env(dataset, opt_llm_config, exec_llm_config, **kwargs)
         use_dynamic_optimizer=kwargs.get('use_dynamic_optimizer', False),
         validation_rounds=kwargs.get('validation_rounds', 3),
         rl_weight=kwargs.get('rl_weight', 0.5),
-        train_test_split=kwargs.get('train_test_split', 0.8)
+        train_test_split=kwargs.get('train_test_split', 0.8),
+        # MCTS + Qwen参数
+        use_qwen_code_generation=kwargs.get('use_qwen_code_generation', False),
+        qwen_code_generator=kwargs.get('qwen_code_generator'),
+        qwen_max_retries=kwargs.get('qwen_max_retries', 2)
     )
 
 

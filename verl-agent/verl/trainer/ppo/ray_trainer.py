@@ -60,7 +60,7 @@ from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seql
 from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
 from verl.workers.rollout.async_server import AsyncLLMServerManager
-from gigpo import core_gigpo
+# from gigpo import core_gigpo  # REMOVED: GiGPO found to be unstable, using GRPO uniformly
 
 from agent_system.multi_turn_rollout import TrajectoryCollector, adjust_batch
 
@@ -83,17 +83,9 @@ class Role(Enum):
 
 class AdvantageEstimator(str, Enum):
     """
-    Using an enumeration class to avoid spelling errors in adv_estimator
+    Only GRPO is supported - the simplest and most effective algorithm
     """
-
-    GAE = "gae"
     GRPO = "grpo"
-    REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
-    REINFORCE_PLUS_PLUS_BASELINE = "reinforce_plus_plus_baseline"
-    REMAX = "remax"
-    RLOO = "rloo"
-    GRPO_PASSK = "grpo_passk"
-    GiGPO = 'gigpo'
 
 
 @dataclass
@@ -241,17 +233,14 @@ def compute_response_mask(data: DataProto):
     return attention_mask[:, -response_length:]
 
 
-def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True, step_advantage_w=1.0, gigpo_mode="mean_std_norm", gigpo_enable_similarity=False, gigpo_similarity_thresh=0.95, **kwargs):
-    """Compute advantage estimates for policy optimization.
+def compute_advantage(data: DataProto, adv_estimator, num_repeat=1, multi_turn=False, norm_adv_by_std_in_grpo=True):
+    """Compute advantage estimates for policy optimization using GRPO.
 
-    This function computes advantage estimates using various estimators like GAE, GRPO, REINFORCE++, etc.
-    The advantage estimates are used to guide policy optimization in RL algorithms.
+    Only GRPO is supported - the simplest and most effective algorithm.
 
     Args:
         data (DataProto): The data containing batched model outputs and inputs.
-        adv_estimator: The advantage estimator to use (e.g., GAE, GRPO, REINFORCE++).
-        gamma (float, optional): Discount factor for future rewards. Defaults to 1.0.
-        lam (float, optional): Lambda parameter for GAE. Defaults to 1.0.
+        adv_estimator: The advantage estimator to use (must be GRPO).
         num_repeat (int, optional): Number of times to repeat the computation. Defaults to 1.
         multi_turn (bool, optional): Whether the data is from a multi-turn conversation. Defaults to False.
         norm_adv_by_std_in_grpo (bool, optional): Whether to normalize advantages by standard deviation in GRPO. Defaults to True.
@@ -263,24 +252,24 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
     if "response_mask" not in data.batch:
         data.batch["response_mask"] = compute_response_mask(data)
     # prepare response group
-    # TODO: add other ways to estimate advantages
-    if adv_estimator == AdvantageEstimator.GAE:
-        advantages, returns = core_algos.compute_gae_advantage_return(
-            token_level_rewards=data.batch["token_level_rewards"],
-            values=data.batch["values"],
-            response_mask=data.batch["response_mask"],
-            gamma=gamma,
-            lam=lam,
-        )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
-        if kwargs.get("use_pf_ppo", False):
-            data = core_algos.compute_pf_ppo_reweight_data(
-                data,
-                kwargs.get("pf_ppo_reweight_method", "pow"),
-                kwargs.get("pf_ppo_weight_pow", 2.0),
-            )
-    elif adv_estimator == AdvantageEstimator.GRPO:
+    # REMOVED: GAE advantage computation - using GRPO uniformly
+    # if adv_estimator == AdvantageEstimator.GAE:
+    #     advantages, returns = core_algos.compute_gae_advantage_return(
+    #         token_level_rewards=data.batch["token_level_rewards"],
+    #         values=data.batch["values"],
+    #         response_mask=data.batch["response_mask"],
+    #         gamma=gamma,
+    #         lam=lam,
+    #     )
+    #     data.batch["advantages"] = advantages
+    #     data.batch["returns"] = returns
+    #     if kwargs.get("use_pf_ppo", False):
+    #         data = core_algos.compute_pf_ppo_reweight_data(
+    #             data,
+    #             kwargs.get("pf_ppo_reweight_method", "pow"),
+    #             kwargs.get("pf_ppo_weight_pow", 2.0),
+    #         )
+    if adv_estimator == AdvantageEstimator.GRPO:
         # TODO: test on more adv estimator type
         grpo_calculation_mask = data.batch["response_mask"]
         if multi_turn:
@@ -297,68 +286,8 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
-    elif adv_estimator == AdvantageEstimator.GRPO_PASSK:
-        advantages, returns = core_algos.compute_grpo_passk_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
-            response_mask=data.batch["response_mask"],
-            index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch['traj_uid'],
-            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-        )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
-    elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE:
-        advantages, returns = core_algos.compute_reinforce_plus_plus_baseline_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
-            response_mask=data.batch["response_mask"],
-            index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch['traj_uid'],
-        )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
-    elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS:
-        advantages, returns = core_algos.compute_reinforce_plus_plus_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
-            response_mask=data.batch["response_mask"],
-            gamma=gamma,
-        )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
-    elif adv_estimator == AdvantageEstimator.REMAX:
-        advantages, returns = core_algos.compute_remax_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
-            reward_baselines=data.batch["reward_baselines"],
-            response_mask=data.batch["response_mask"],
-        )
-
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
-    elif adv_estimator == AdvantageEstimator.RLOO:
-        advantages, returns = core_algos.compute_rloo_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
-            response_mask=data.batch["response_mask"],
-            index=data.non_tensor_batch["uid"],
-            traj_index=data.non_tensor_batch['traj_uid'],
-        )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
-    elif adv_estimator == AdvantageEstimator.GiGPO:
-        advantages, returns = core_gigpo.compute_gigpo_outcome_advantage(
-            token_level_rewards=data.batch['token_level_rewards'], # for episode group reward computing
-            step_rewards=data.batch['step_rewards'], # for step group reward computing
-            response_mask=data.batch['response_mask'],
-            anchor_obs=data.non_tensor_batch['anchor_obs'],
-            index=data.non_tensor_batch['uid'],
-            traj_index=data.non_tensor_batch['traj_uid'],
-            step_advantage_w=step_advantage_w,
-            mode=gigpo_mode,
-            enable_similarity=gigpo_enable_similarity,
-            similarity_thresh=gigpo_similarity_thresh,
-            )
-        data.batch['advantages'] = advantages
-        data.batch['returns'] = returns
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"Only GRPO is supported. Got: {adv_estimator}")
     return data
 
 
@@ -442,20 +371,11 @@ class RayPPOTrainer:
         if config.algorithm.use_kl_in_reward:
             self.kl_ctrl_in_reward = core_algos.get_kl_controller(config.algorithm.kl_ctrl)
 
-        if self.config.algorithm.adv_estimator == AdvantageEstimator.GAE:
-            self.use_critic = True
-        elif self.config.algorithm.adv_estimator in [
-            AdvantageEstimator.GRPO,
-            AdvantageEstimator.GRPO_PASSK,
-            AdvantageEstimator.REINFORCE_PLUS_PLUS,
-            AdvantageEstimator.REMAX,
-            AdvantageEstimator.RLOO,
-            AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
-            AdvantageEstimator.GiGPO
-        ]:
+        # Only GRPO is supported - no critic/value function needed
+        if self.config.algorithm.adv_estimator == AdvantageEstimator.GRPO:
             self.use_critic = False
         else:
-            raise NotImplementedError
+            raise NotImplementedError(f"Only GRPO is supported. Got: {self.config.algorithm.adv_estimator}")
 
         self._validate_config()
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
@@ -1085,22 +1005,6 @@ class RayPPOTrainer:
                                                                 envs=self.envs,
                                                                 is_train=True,
                                                                 )
-                    if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
-                        with _timer("gen_max", timing_raw):
-                            gen_baseline_batch = deepcopy(gen_batch)
-                            gen_baseline_batch.meta_info["do_sample"] = False
-                            gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)
-
-                            batch = batch.union(gen_baseline_output)
-                            reward_baseline_tensor = self.reward_fn(batch)
-                            reward_baseline_tensor = reward_baseline_tensor.sum(dim=-1)
-
-                            batch.pop(batch_keys=list(gen_baseline_output.batch.keys()))
-
-                            batch.batch["reward_baselines"] = reward_baseline_tensor
-
-                            del gen_baseline_batch, gen_baseline_output
-
                     # batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
                     # # repeat to align with repeated responses in rollout
                     # batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
@@ -1108,13 +1012,14 @@ class RayPPOTrainer:
                     del batch
                     batch = gen_batch_output
 
-                    if self.config.algorithm.adv_estimator == AdvantageEstimator.GiGPO:
-                        step_rewards_tensor = core_gigpo.compute_step_discounted_returns(
-                            batch=batch,
-                            gamma=self.config.algorithm.gamma
-                        )
-                        batch.batch['step_rewards'] = step_rewards_tensor
-                    
+                    # REMOVED: GiGPO step rewards computation - GiGPO found to be unstable
+                    # if self.config.algorithm.adv_estimator == AdvantageEstimator.GiGPO:
+                    #     step_rewards_tensor = core_gigpo.compute_step_discounted_returns(
+                    #         batch=batch,
+                    #         gamma=self.config.algorithm.gamma
+                    #     )
+                    #     batch.batch['step_rewards'] = step_rewards_tensor
+
                     batch = adjust_batch(self.config, batch)
 
                     batch.batch["response_mask"] = compute_response_mask(batch)
@@ -1221,18 +1126,9 @@ class RayPPOTrainer:
                         batch = compute_advantage(
                             batch,
                             adv_estimator=self.config.algorithm.adv_estimator,
-                            gamma=self.config.algorithm.gamma,
-                            lam=self.config.algorithm.lam,
                             num_repeat=self.config.actor_rollout_ref.rollout.n,
                             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                             multi_turn=self.config.actor_rollout_ref.rollout.multi_turn.enable,
-                            use_pf_ppo=self.config.algorithm.use_pf_ppo,
-                            pf_ppo_reweight_method=self.config.algorithm.pf_ppo.reweight_method,
-                            pf_ppo_weight_pow=self.config.algorithm.pf_ppo.weight_pow,
-                            step_advantage_w=self.config.algorithm.gigpo.step_advantage_w,
-                            gigpo_mode=self.config.algorithm.gigpo.mode,
-                            gigpo_enable_similarity= self.config.algorithm.gigpo.enable_similarity,
-                            gigpo_similarity_thresh=self.config.algorithm.gigpo.similarity_thresh,
                         )
 
                     # update critic
