@@ -1,11 +1,9 @@
 import json
 import os
 import re
-import sys
 import time
 import traceback
 from typing import List
-import importlib.util
 
 from scripts.prompts.optimize_prompt import (
     WORKFLOW_CUSTOM_USE,
@@ -26,44 +24,14 @@ class GraphUtils:
         return directory
 
     def load_graph(self, round_number: int, workflows_path: str):
-        """
-        Load graph module from file path using importlib.
-        Fixed to handle absolute paths correctly.
-        """
-        # Construct the file path to graph.py
-        graph_file_path = os.path.join(workflows_path, f"round_{round_number}", "graph.py")
-
-        # Ensure the path is absolute
-        graph_file_path = os.path.abspath(graph_file_path)
+        workflows_path = workflows_path.replace("\\", ".").replace("/", ".")
+        graph_module_name = f"{workflows_path}.round_{round_number}.graph"
 
         try:
-            # Create a unique module name to avoid conflicts
-            module_name = f"workflow_round_{round_number}_{id(self)}"
-
-            # Load module from file path
-            spec = importlib.util.spec_from_file_location(module_name, graph_file_path)
-            if spec is None or spec.loader is None:
-                raise ImportError(f"Cannot load module from {graph_file_path}")
-
-            graph_module = importlib.util.module_from_spec(spec)
-
-            # Add to sys.modules to make imports within the module work
-            sys.modules[module_name] = graph_module
-
-            # Execute the module
-            spec.loader.exec_module(graph_module)
-
-            # Get the Workflow class
+            graph_module = __import__(graph_module_name, fromlist=[""])
             graph_class = getattr(graph_module, "Workflow")
             return graph_class
-
-        except FileNotFoundError as e:
-            logger.error(f"Graph file not found for round {round_number}: {graph_file_path}")
-            raise
-        except AttributeError as e:
-            logger.error(f"Workflow class not found in graph module for round {round_number}: {e}")
-            raise
-        except Exception as e:
+        except ImportError as e:
             logger.error(f"Error loading graph for round {round_number}: {e}")
             raise
 

@@ -13,10 +13,9 @@ from benchmarks.humaneval import HumanEvalBenchmark
 from benchmarks.math import MATHBenchmark
 from benchmarks.mbpp import MBPPBenchmark
 from benchmarks.livecodebench import LiveCodeBench
-from benchmarks.aime import AIMEBenchmark
 
 # If you want to customize tasks, add task types here and provide evaluation functions, just like the ones given above
-DatasetType = Literal["HumanEval", "MBPP", "GSM8K", "MATH", "HotpotQA", "DROP", "LiveCodeBench", "AIME"]
+DatasetType = Literal["HumanEval", "MBPP", "GSM8K", "MATH", "HotpotQA", "DROP", "LiveCodeBench"]
 
 
 class Evaluator:
@@ -34,7 +33,6 @@ class Evaluator:
             "MBPP": MBPPBenchmark,
             "DROP": DROPBenchmark,
             "LiveCodeBench": LiveCodeBench,
-            "AIME": AIMEBenchmark,
         }
 
     async def graph_evaluate(
@@ -63,16 +61,5 @@ class Evaluator:
         return graph(name=dataset, llm_config=llm_config, dataset=dataset_config)
 
     def _get_data_path(self, dataset: DatasetType, test: bool) -> str:
-        import os
-
-        # Get AFlow directory (parent of scripts/)
-        aflow_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-        # AIME dataset has special path (single file, no train/test split in filename)
-        if dataset == "AIME":
-            return os.path.join(aflow_dir, "data", "AIME_2024.jsonl")
-
-        # Other datasets: return absolute path for safety
         base_path = f"data/datasets/{dataset.lower()}"
-        filename = f"{base_path}_test.jsonl" if test else f"{base_path}_validate.jsonl"
-        return os.path.join(aflow_dir, filename)
+        return f"{base_path}_test.jsonl" if test else f"{base_path}_validate.jsonl"

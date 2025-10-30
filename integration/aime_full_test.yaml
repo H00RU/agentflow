@@ -1,26 +1,36 @@
+# Schema 1 MCTS Optimization Configuration
+# 纯粹的MCTS树搜索优化（不涉及RL融合）
 device: "cuda"
-# Mini-Batch训练配置 - 随机采样减少过拟合，加快反馈循环
-# 每次在6题上测试（而非24题），通过多episodes覆盖全部数据
-total_epochs: 10  # 增加到10个epoch以充分学习
-episodes_per_epoch: 24  # 从6增加到24（mini-batch模式，每次测试更快）
-update_frequency: 4  # 每4个episode更新一次（累积足够样本后更新）
-eval_episodes: 2  # 评估2个episode,更稳定的评估
-save_frequency: 1  # 每1个epoch保存一次checkpoint（确保有checkpoint）
 
-output_dir: "/content/drive/MyDrive/agentflow/outputs/full_test"
-experience_pool_size: 500  # 增加经验池大小
+# 训练配置
+total_epochs: 5            # 总epoch数
+episodes_per_epoch: 3      # 每个epoch的episode数（每个episode运行一轮MCTS）
+save_frequency: 1          # 每个epoch保存一次checkpoint
 
+# 输出目录（Google Drive）
+output_dir: "/content/drive/MyDrive/agentflow/outputs/aime_full_test"
+
+# 环境配置
 environment:
-  train_datasets:
-    - "AIME"
-  test_datasets:
-    - "AIME"
-  data_path: "/content/agentflow/AFlow/data/AIME_2024.jsonl"
+  # 数据集配置
+  dataset: "AIME"
 
-  # 数据集划分比例（泛用配置，适用于所有数据集）
-  train_test_split: 0.8  # 80% 训练集，20% 测试集（可根据数据集调整）
+  # MCTS配置
+  max_rounds: 5              # MCTS树搜索最大轮数
+  sample: 24                 # 每轮评估的样本数
 
-  # 优化LLM配置 - 提升推理能力
+  # 数据集划分
+  train_test_split: 0.8      # 80% 训练集，20% 测试集
+  mini_batch_size: 6         # Mini-batch大小（随机采样6题测试）
+
+  # Operators列表
+  operators:
+    - "Custom"               # 基础operator
+    - "ScEnsemble"           # 自一致性集成
+    - "Review"               # 审查
+    - "Revise"               # 修订
+
+  # LLM配置
   opt_llm_config:
     model: "gpt-4o-mini"
     key: "${OPENAI_API_KEY}"
@@ -28,63 +38,10 @@ environment:
     temperature: 0.9
 
   exec_llm_config:
-    model: "gpt-4o-mini"  # 保持使用mini观察性能
+    model: "gpt-4o-mini"
     key: "${OPENAI_API_KEY}"
     base_url: "https://api.openai.com/v1"
-    temperature: 0.7  # 降低temperature提高稳定性
-
-  # 提供多样化的operators让Qwen学习选择
-  operators:
-    - "Custom"           # 通用operator - 适合数学推理
-    # "CustomCodeGenerate" - 代码生成operator，不适合AIME数学题，已移除
-    - "ScEnsemble"       # 自一致性集成
-    - "Test"             # 测试operator
-    - "Review"           # 审查operator
-    - "Revise"           # 修订operator - 触发条件已修复！
-
-  env_num: 1  # 单环境,避免API并发,增加状态多样性
-  group_n: 1
-  max_rounds: 5  # 每个episode最多5轮
-  validation_rounds: 3
-  sample: 24  # 训练集大小（总共30题，24训练+6测试）
-  mini_batch_size: 6  # Mini-Batch模式：每次随机采样6题（加快反馈，减少过拟合）
-
-  # 动态优化模式配置
-  use_dynamic_optimizer: true  # 启用动态优化（MCTS + RL）
-  rl_weight: 0.5  # RL权重，平衡MCTS UCB和RL Q-value
-
-  # MCTS + Qwen直接生成配置（已启用）
-  use_qwen_code_generation: true  # ✅ 启用：让Qwen直接生成代码（无GPT-4 fallback）
-  qwen_max_retries: 2  # Qwen语法错误时的最大重试次数
-  #
-  # MCTS + Qwen直接生成 = Dynamic Mode (MCTS) + Qwen代码生成
-  # - 保留完整MCTS树搜索
-  # - 用Qwen完全自主生成代码（失败时通过负奖励学习）
-  # - 无GPT-4干预，坚持项目初心
-  # - 降低成本，完全对齐原版AFlow架构
-
-  # 新增：workflow内部采样数配置
-  # 这控制ScEnsemble生成多少个候选方案
-  workflow_sample_count: 15  # 使用15次采样（平衡速度和质量）
-
-rl:
-  policy:
-    model_path: "/root/models/Qwen2.5-7B-Instruct"
-    use_lora: true
-    lora_r: 16
-    lora_alpha: 32
-
-  # GRPO训练参数 - 针对AIME小数据集优化（24个训练样本）
-  learning_rate: 0.00003  # 更低学习率，适合高难度题目（从0.0001降低）
-  batch_size: 4  # 小batch，适合少样本（24个训练样本，从8降低）
-  ppo_epochs: 4  # PPO epochs用于GRPO的多轮优化
-  ppo_clip: 0.2
-  gamma: 0.99  # 保留用于兼容性（GRPO不使用discount）
-  entropy_coef: 0.1  # 提高探索性，防止operator使用退化
-  gradient_clip: 1.0
+    temperature: 0.7
 
 logging:
   level: "INFO"
-
-debug:
-  verbose_env: true
